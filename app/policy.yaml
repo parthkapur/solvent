@@ -1,0 +1,6 @@
+# Tool class decides the gate. read = AI-assisted, runs freely. write = autonomous
+# execution, blocked unless a human minted an approval token for this exact call.
+tools:
+  get_cost_summary: read
+  get_resource_health: read
+  restart_container_app: write
