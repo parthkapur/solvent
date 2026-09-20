@@ -1,0 +1,105 @@
+trigger:
+  branches:
+    include: [main]
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: solvent # AZURE_SERVICE_CONNECTION, APPROVAL_SECRET (secret), ALERT_EMAIL
+  - name: TF_IN_AUTOMATION
+    value: "true"
+
+stages:
+  - stage: Validate
+    jobs:
+      - job: app
+        displayName: lint + unit/contract tests
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.12"
+          - script: pip install -q uv && uv sync --frozen
+            displayName: install
+          - script: uv run ruff check . && uv run pytest -q --junitxml=test-results.xml
+            displayName: ruff + pytest
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFiles: test-results.xml
+
+      - job: infra
+        displayName: terraform fmt/validate/tflint/plan
+        steps:
+          - task: AzureCLI@2
+            displayName: terraform plan
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              addSpnToEnvironment: true
+              workingDirectory: infra
+              inlineScript: |
+                set -euo pipefail
+                export ARM_CLIENT_ID=$servicePrincipalId ARM_CLIENT_SECRET=$servicePrincipalKey \
+                       ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                curl -sL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash >/dev/null
+                terraform init -input=false -backend-config=backend.hcl
+                terraform fmt -check -recursive
+                terraform validate
+                tflint --init && tflint
+                terraform plan -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan \
+                  -var image_tag=$(Build.SourceVersion) \
+                  -var approval_secret=$(APPROVAL_SECRET) \
+                  -var alert_email=$(ALERT_EMAIL)
+          - publish: $(Build.ArtifactStagingDirectory)/tfplan
+            artifact: tfplan
+
+  - stage: Build
+    dependsOn: Validate
+    jobs:
+      - job: image
+        displayName: build + push to ACR
+        steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              inlineScript: |
+                set -euo pipefail
+                # ACR Tasks (az acr build) are disabled on free/trial subscriptions; build on the agent.
+                ACR=$(az acr list -g solvent-rg --query "[0].loginServer" -o tsv)
+                az acr login -n "${ACR%%.*}"
+                docker build -t "$ACR/solvent:$(Build.SourceVersion)" .
+                docker push "$ACR/solvent:$(Build.SourceVersion)"
+
+  - stage: Deploy
+    dependsOn: Build
+    jobs:
+      - deployment: prod
+        environment: prod # manual approval check lives on the environment, not in YAML
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: tfplan
+                - task: AzureCLI@2
+                  displayName: terraform apply (saved plan) + smoke
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    addSpnToEnvironment: true
+                    workingDirectory: infra
+                    inlineScript: |
+                      set -euo pipefail
+                      export ARM_CLIENT_ID=$servicePrincipalId ARM_CLIENT_SECRET=$servicePrincipalKey \
+                             ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                      terraform init -input=false -backend-config=backend.hcl
+                      terraform apply -input=false $(Pipeline.Workspace)/tfplan/tfplan
+                      URL=$(terraform output -raw app_url)
+                      for i in $(seq 1 12); do curl -fsS "$URL/healthz" && break || sleep 10; done
+                      curl -fsS -X POST "$URL/mcp" \
+                        -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+                        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+                        | grep -q restart_container_app && echo "smoke ok"
