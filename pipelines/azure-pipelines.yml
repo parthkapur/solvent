@@ -102,6 +102,7 @@ stages:
                       terraform init -input=false -backend-config=backend.hcl
                       terraform apply -input=false $(Pipeline.Workspace)/tfplan/tfplan
                       URL=$(terraform output -raw app_url)
+                      az config set extension.use_dynamic_install=yes_without_prompt -o none
                       # /healthz alone is not enough: the previous revision keeps serving until the new one is ready.
                       for i in $(seq 1 30); do
                         R=$(az containerapp show -n solvent-app -g solvent-rg --query "[properties.latestRevisionName,properties.latestReadyRevisionName]" -o tsv | uniq | wc -l)
