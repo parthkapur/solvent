@@ -36,6 +36,7 @@ stages:
             inputs:
               azureSubscription: $(AZURE_SERVICE_CONNECTION)
               scriptType: bash
+              scriptLocation: inlineScript
               addSpnToEnvironment: true
               workingDirectory: infra
               inlineScript: |
@@ -64,6 +65,7 @@ stages:
             inputs:
               azureSubscription: $(AZURE_SERVICE_CONNECTION)
               scriptType: bash
+              scriptLocation: inlineScript
               inlineScript: |
                 set -euo pipefail
                 # ACR Tasks (az acr build) are disabled on free/trial subscriptions; build on the agent.
@@ -89,6 +91,7 @@ stages:
                   inputs:
                     azureSubscription: $(AZURE_SERVICE_CONNECTION)
                     scriptType: bash
+                    scriptLocation: inlineScript
                     addSpnToEnvironment: true
                     workingDirectory: infra
                     inlineScript: |
