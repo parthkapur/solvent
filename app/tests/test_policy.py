@@ -93,3 +93,21 @@ def test_governed_returns_exception_as_data(monkeypatch, caplog):
         assert read_tool() == {"error": "(429) Too many requests"}
     ev = json.loads(caplog.records[-1].message)
     assert (ev["decision"], ev["reason"]) == ("allowed", "error:RuntimeError")
+
+
+def test_expired_token_denied():
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, now=1000)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000 + 599) == ("allowed", "approved")
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000 + 601) == ("denied", "approval_expired")
+
+
+def test_tampered_timestamp_denied():
+    sig, ts = policy.mint_token("write_tool", {"name": "x"}, SECRET, now=1000).split(".")
+    args = {"name": "x", "approval_token": f"{sig}.{int(ts) + 3600}"}
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000) == ("denied", "approval_required")
+
+
+def test_malformed_token_denied():
+    args = {"name": "x", "approval_token": "garbage"}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required")

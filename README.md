@@ -41,10 +41,12 @@ tools:
 
 1. Unknown tool → `{"denied": true, "reason": "not_in_policy"}`.
 2. `read` → runs.
-3. `write` → requires `approval_token == HMAC_SHA256(APPROVAL_SECRET, "tool:canonical_json(args)")`.
-   Missing or wrong → `{"denied": true, "reason": "approval_required"}`. The token is bound to
-   the tool **and** the exact arguments, so an approval for `name=solvent-app` cannot be replayed
-   against another app.
+3. `write` → requires `approval_token = "<sig>.<ts>"` where
+   `sig = HMAC_SHA256(APPROVAL_SECRET, "tool:canonical_json(args):ts")`.
+   Missing or wrong → `{"denied": true, "reason": "approval_required"}`; older than 10 minutes →
+   `{"denied": true, "reason": "approval_expired"}`. The token is bound to the tool, the exact
+   arguments **and** the time it was minted, so it cannot be replayed against another app or
+   kept for later.
 4. Denials are returned as data, not raised.
 5. Emits one audit line (JSON, logger `solvent.audit`) with
    `ts, tool, args_hash, decision, reason, latency_ms, trace_id, span_id`, and increments
@@ -149,7 +151,7 @@ Alert (Terraform, `azurerm_monitor_scheduled_query_rules_alert_v2`): more than 5
 
 ## Not implemented
 
-- Token expiry (`exp` claim) and single-use nonces — replay protection.
+- Single-use nonces (a token can be replayed within its 10-minute window).
 - RBAC on who may mint approvals, with the minting itself audited.
 - A second environment via Terraform modules and a `dev` stage without approval.
 - SLO burn-rate alerts on `mcp.tool.latency_ms`; dashboard as code.

@@ -31,13 +31,22 @@ def canonical(args: dict[str, Any]) -> str:
     return json.dumps(args, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def mint_token(tool: str, args: dict[str, Any], secret: str) -> str:
-    msg = f"{tool}:{canonical(args)}".encode()
-    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+TOKEN_TTL_S = 600  # an approval is for "now", not forever
+
+
+def mint_token(tool: str, args: dict[str, Any], secret: str, now: float | None = None) -> str:
+    """Return "<hmac>.<unix_ts>". The timestamp is signed, so it cannot be moved."""
+    ts = int(now if now is not None else time.time())
+    msg = f"{tool}:{canonical(args)}:{ts}".encode()
+    return f"{hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()}.{ts}"
 
 
 def decide(
-    tool: str, args: dict[str, Any], policy: dict[str, str], secret: str
+    tool: str,
+    args: dict[str, Any],
+    policy: dict[str, str],
+    secret: str,
+    now: float | None = None,
 ) -> tuple[str, str]:
     cls = policy.get(tool)
     if cls is None:
@@ -46,11 +55,15 @@ def decide(
         return "allowed", "read"
     if not secret:
         return "denied", "no_approval_secret"
-    token = args.get("approval_token", "")
-    expected = mint_token(tool, _without_token(args), secret)
-    if token and hmac.compare_digest(token, expected):
-        return "allowed", "approved"
-    return "denied", "approval_required"
+    sig, _, ts = str(args.get("approval_token", "")).partition(".")
+    if not ts.isdigit():
+        return "denied", "approval_required"
+    expected = mint_token(tool, _without_token(args), secret, now=int(ts))
+    if not hmac.compare_digest(sig, expected.partition(".")[0]):
+        return "denied", "approval_required"
+    if (now if now is not None else time.time()) - int(ts) > TOKEN_TTL_S:
+        return "denied", "approval_expired"
+    return "allowed", "approved"
 
 
 def _without_token(args: dict[str, Any]) -> dict[str, Any]:
