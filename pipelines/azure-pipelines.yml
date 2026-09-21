@@ -43,7 +43,8 @@ stages:
                 set -euo pipefail
                 export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
                        ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-                curl -sL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash >/dev/null
+                curl -sLo /tmp/tflint.zip https://github.com/terraform-linters/tflint/releases/latest/download/tflint_linux_amd64.zip
+                sudo unzip -qo /tmp/tflint.zip tflint -d /usr/local/bin
                 terraform init -input=false -backend-config=backend.hcl
                 terraform fmt -check -recursive
                 terraform validate
