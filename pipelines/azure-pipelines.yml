@@ -1,6 +1,8 @@
 trigger:
   branches:
     include: [main]
+  paths:
+    exclude: ["*.md"] # docs never need a deploy
 
 pool:
   vmImage: ubuntu-latest
