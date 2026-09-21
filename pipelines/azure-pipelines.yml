@@ -102,7 +102,13 @@ stages:
                       terraform init -input=false -backend-config=backend.hcl
                       terraform apply -input=false $(Pipeline.Workspace)/tfplan/tfplan
                       URL=$(terraform output -raw app_url)
-                      for i in $(seq 1 12); do curl -fsS "$URL/healthz" && break || sleep 10; done
+                      # /healthz alone is not enough: the previous revision keeps serving until the new one is ready.
+                      for i in $(seq 1 30); do
+                        R=$(az containerapp show -n solvent-app -g solvent-rg --query "[properties.latestRevisionName,properties.latestReadyRevisionName]" -o tsv | uniq | wc -l)
+                        [ "$R" -eq 1 ] && break; sleep 10
+                      done
+                      [ "$R" -eq 1 ] || { echo "new revision never became ready"; exit 1; }
+                      curl -fsS "$URL/healthz"
                       curl -fsS -X POST "$URL/mcp" \
                         -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
                         -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
