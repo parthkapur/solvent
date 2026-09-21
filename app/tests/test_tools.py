@@ -46,4 +46,6 @@ async def test_write_tool_allowed_with_token():
 async def test_healthz():
     from starlette.testclient import TestClient
 
-    assert TestClient(server.app).get("/healthz").json() == {"ok": True}
+    client = TestClient(server.app)
+    assert client.get("/healthz").json() == {"ok": True}
+    assert client.get("/").json()["endpoints"]["health"] == "/healthz"

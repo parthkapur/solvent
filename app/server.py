@@ -49,6 +49,18 @@ def restart_container_app(name: str, approval_token: str = "") -> dict[str, Any]
     return az.restart_container_app(name)
 
 
+@mcp.custom_route("/", methods=["GET"])
+async def index(_: Request) -> JSONResponse:
+    return JSONResponse(
+        {
+            "service": "solvent",
+            "description": "Governed MCP server: read tools run freely, write tools need a human-minted approval token.",
+            "endpoints": {"mcp": "/mcp (POST, streamable HTTP)", "health": "/healthz"},
+            "source": "https://github.com/parthkapur/solvent",
+        }
+    )
+
+
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
