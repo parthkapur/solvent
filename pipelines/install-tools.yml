@@ -1,0 +1,11 @@
+# Hosted ubuntu images no longer ship terraform or tflint. Pinned versions, same as local.
+steps:
+  - script: |
+      set -euo pipefail
+      TFV=1.16.3
+      curl -sLo /tmp/tf.zip https://releases.hashicorp.com/terraform/$TFV/terraform_${TFV}_linux_amd64.zip
+      sudo unzip -qo /tmp/tf.zip terraform -d /usr/local/bin
+      curl -sLo /tmp/tflint.zip https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_linux_amd64.zip
+      sudo unzip -qo /tmp/tflint.zip tflint -d /usr/local/bin
+      terraform version && tflint --version
+    displayName: install terraform + tflint

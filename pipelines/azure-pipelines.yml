@@ -31,6 +31,7 @@ stages:
       - job: infra
         displayName: terraform fmt/validate/tflint/plan
         steps:
+          - template: install-tools.yml
           - task: AzureCLI@2
             displayName: terraform plan
             inputs:
@@ -43,8 +44,6 @@ stages:
                 set -euo pipefail
                 export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
                        ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-                curl -sLo /tmp/tflint.zip https://github.com/terraform-linters/tflint/releases/latest/download/tflint_linux_amd64.zip
-                sudo unzip -qo /tmp/tflint.zip tflint -d /usr/local/bin
                 terraform init -input=false -backend-config=backend.hcl
                 terraform fmt -check -recursive
                 terraform validate
@@ -87,6 +86,7 @@ stages:
                 - checkout: self
                 - download: current
                   artifact: tfplan
+                - template: install-tools.yml
                 - task: AzureCLI@2
                   displayName: terraform apply (saved plan) + smoke
                   inputs:
