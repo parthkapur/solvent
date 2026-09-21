@@ -1,4 +1,4 @@
-# Solvent — a governed MCP server on Azure
+# Solvent: a governed MCP server on Azure
 
 An MCP server with three tools against Azure and a controls layer in front of them:
 
@@ -11,6 +11,9 @@ An MCP server with three tools against Azure and a controls layer in front of th
 Deployed to Azure Container Apps by Terraform through an Azure DevOps pipeline with a manual
 approval before apply. The app is small by design; the project is about running the controls
 layer properly.
+
+Live at https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io (`/` describes the
+service, `/healthz`, `/mcp`).
 
 ## Stack
 
@@ -95,7 +98,56 @@ curl -s -X POST localhost:8000/mcp \
 Tests: `uv run pytest`. Policy tests hit `decide`/`governed` directly; contract tests go through
 `MCPServer.call_tool` with `azure_clients` monkeypatched.
 
-From Claude Code: `claude mcp add --transport http solvent https://<app-url>/mcp`
+## Try it
+
+Add the deployed server to an MCP client. Claude Code:
+
+```bash
+claude mcp add --transport http solvent https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io/mcp
+claude
+```
+
+Claude Desktop: Settings > Connectors > Add custom connector, URL
+`https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io/mcp`.
+
+Then, in the chat:
+
+1. **Read tool, no gate.** "Is everything in the solvent-rg resource group healthy?"
+   Claude calls `get_resource_health` and answers.
+2. **Read tool, upstream error surfaced as data.** "What did solvent-rg cost in the last 3 days?"
+   Claude calls `get_cost_summary`. On a new subscription this returns
+   `{"error": "(429) Too many requests"}` until Cost Management has billing history.
+3. **Write tool, denied.** "Restart the solvent-app container app using only the solvent tools."
+   Claude calls `restart_container_app`, gets `{"denied": true, "reason": "approval_required"}`,
+   and asks for a token.
+4. **Mint a token** in a terminal, with the same `APPROVAL_SECRET` the deployment uses:
+   ```bash
+   APPROVAL_SECRET=... uv run python -m app.approve restart_container_app name=solvent-app
+   ```
+   Paste it to Claude: "Here is the approval token: <token>". Claude retries with
+   `approval_token` set and gets `{"restarted": "solvent-app", "revision": "..."}`.
+5. **Same token, different target.** "Use that token to restart an app called other-app."
+   Denied, `approval_required`: the signature covers the arguments.
+6. **Same token, 10 minutes later.** Denied, `approval_expired`.
+7. **Unknown tool.** Any MCP call to a tool name not in `policy.yaml` gets
+   `{"denied": true, "reason": "not_in_policy"}`.
+
+Every step above is now a row in App Insights (`solvent-appi` > Logs):
+
+```kql
+AppTraces
+| where isnotempty(Properties.decision)
+| project TimeGenerated, tool=tostring(Properties.tool), decision=tostring(Properties.decision), reason=tostring(Properties.reason)
+| order by TimeGenerated desc
+```
+
+Same thing with curl, no AI client:
+
+```bash
+URL=https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io
+curl -s -X POST $URL/mcp -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"restart_container_app","arguments":{"name":"solvent-app","approval_token":"<token>"}}}'
+```
 
 ## Deploy
 
@@ -124,15 +176,15 @@ After that, every push to `main` deploys through the pipeline.
 
 ## Pipeline
 
-**Validate** — two parallel jobs.
+**Validate.** Two parallel jobs.
 - app: `ruff`, `pytest` with JUnit results published.
 - infra: `terraform fmt -check`, `validate`, `tflint`, `terraform plan -out=tfplan` with
   `image_tag = $(Build.SourceVersion)`. The plan is published as an artifact.
 
-**Build** — `docker build`, tag = git SHA, `docker push` to ACR after `az acr login` with the
+**Build.** `docker build`, tag = git SHA, `docker push` to ACR after `az acr login` with the
 service connection identity.
 
-**Deploy** — deployment job on environment `prod`; the approval check pauses the run until
+**Deploy.** Deployment job on environment `prod`; the approval check pauses the run until
 someone approves. Then `terraform apply` of the saved plan artifact, wait until
 `latestReadyRevisionName == latestRevisionName` on the Container App, `curl /healthz`, and an
 MCP `tools/list` asserting the three tools.
