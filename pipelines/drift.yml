@@ -1,0 +1,51 @@
+# Nightly: does Azure still look like the state file says it does?
+trigger: none
+pr: none
+
+schedules:
+  - cron: "0 3 * * *" # 03:00 UTC daily
+    displayName: nightly drift check
+    branches:
+      include: [main]
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: solvent
+  - name: TF_IN_AUTOMATION
+    value: "true"
+
+steps:
+  - template: install-tools.yml
+  - task: AzureCLI@2
+    displayName: terraform plan -detailed-exitcode
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      addSpnToEnvironment: true
+      workingDirectory: infra
+      inlineScript: |
+        set -euo pipefail
+        export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
+               ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+        terraform init -input=false -backend-config=backend.hcl
+        # image_tag is whatever is deployed right now, so the running image is not itself drift.
+        TAG=$(az containerapp show -n solvent-app -g solvent-rg \
+              --query 'properties.template.containers[0].image' -o tsv | sed 's/.*://')
+        set +e
+        terraform plan -input=false -detailed-exitcode \
+          -var image_tag="$TAG" \
+          -var approval_secret=$(APPROVAL_SECRET) \
+          -var api_key=$(API_KEY) \
+          -var approvers=$(APPROVERS) \
+          -var alert_email=$(ALERT_EMAIL)
+        rc=$?
+        set -e
+        if [ $rc -eq 2 ]; then
+          echo "##vso[task.logissue type=error]infrastructure has drifted from the state file"
+          exit 1
+        fi
+        exit $rc
