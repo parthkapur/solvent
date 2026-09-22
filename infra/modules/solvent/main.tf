@@ -39,13 +39,25 @@ resource "azurerm_storage_account" "audit" {
   resource_group_name             = azurerm_resource_group.main.name
   location                        = azurerm_resource_group.main.location
   account_tier                    = "Standard"
-  account_replication_type        = "LRS"
+  account_replication_type        = "GRS" # an audit trail is worth paying geo-redundancy for
   min_tls_version                 = "TLS1_2"
   https_traffic_only_enabled      = true
   allow_nested_items_to_be_public = false
 
+  sas_policy {
+    expiration_period = "00.01:00:00" # any SAS handed out dies after an hour
+    expiration_action = "Log"
+  }
+
   blob_properties {
     versioning_enabled = true
+
+    delete_retention_policy {
+      days = 30
+    }
+    container_delete_retention_policy {
+      days = 30
+    }
   }
 
   immutability_policy {

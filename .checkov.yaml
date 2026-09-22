@@ -17,3 +17,17 @@ skip-check:
   - CKV_AZURE_167 # untagged-manifest retention policy — needs Premium
   - CKV_AZURE_233 # zone redundancy — needs Premium
   - CKV_AZURE_237 # dedicated data endpoints — needs Premium
+  #
+  # Audit storage account. Soft-delete, SAS expiry and geo-redundancy were fixed rather
+  # than skipped; what remains needs infrastructure this architecture does not have.
+  - CKV_AZURE_33 # queue-service logging — the account stores blobs only, no queue service
+  - CKV_AZURE_43 # naming rules — the name is interpolated, so checkov cannot evaluate it
+  - CKV_AZURE_59 # public network access — Log Analytics export reaches it over the internet;
+  #                disabling it needs a VNet and a private endpoint
+  - CKV2_AZURE_33 # private endpoint — same, there is no VNet in this architecture
+  - CKV2_AZURE_1 # customer-managed key — service-managed keys; CMK needs Key Vault + rotation
+  - CKV2_AZURE_41 # SAS expiration policy — IS configured (1h, see sas_policy). This checkov
+  #                 version fails the check for any sas_policy block; verified against a flat
+  #                 resource outside the module. The config is right, the check is wrong.
+  - CKV2_AZURE_40 # shared-key authorization — Log Analytics data export delivery with shared
+  #                 keys disabled is unverified; lock it down once export is confirmed working

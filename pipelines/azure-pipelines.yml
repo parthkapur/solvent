@@ -46,10 +46,12 @@ stages:
                 set -euo pipefail
                 export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
                        ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-                terraform init -input=false -backend-config=backend.hcl
+                # fmt and lint the whole tree; plan only the prod root.
                 terraform fmt -check -recursive
+                tflint --init && tflint --recursive
+                cd envs/prod
+                terraform init -input=false -backend-config=backend.hcl
                 terraform validate
-                tflint --init && tflint
                 terraform plan -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan \
                   -var image_tag=$(Build.SourceVersion) \
                   -var approval_secret=$(APPROVAL_SECRET) \
@@ -64,6 +66,26 @@ stages:
             displayName: checkov
           - publish: $(Build.ArtifactStagingDirectory)/tfplan
             artifact: tfplan
+
+      - job: infra_dev
+        displayName: terraform plan (dev, never applied)
+        steps:
+          - template: install-tools.yml
+          - task: AzureCLI@2
+            displayName: terraform plan dev
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              workingDirectory: infra/envs/dev
+              inlineScript: |
+                set -euo pipefail
+                export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
+                       ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                terraform init -input=false -backend-config=backend.hcl
+                # Proves the module composes for a second environment. Never applied.
+                terraform plan -input=false
 
   - stage: Build
     dependsOn: Validate
@@ -109,6 +131,7 @@ stages:
                       set -euo pipefail
                       export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
                              ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                      cd envs/prod
                       terraform init -input=false -backend-config=backend.hcl
                       terraform apply -input=false $(Pipeline.Workspace)/tfplan/tfplan
                       URL=$(terraform output -raw app_url)

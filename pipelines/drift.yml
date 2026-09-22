@@ -26,7 +26,7 @@ steps:
       scriptType: bash
       scriptLocation: inlineScript
       addSpnToEnvironment: true
-      workingDirectory: infra
+      workingDirectory: infra/envs/prod
       inlineScript: |
         set -euo pipefail
         export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \

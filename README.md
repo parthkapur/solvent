@@ -22,7 +22,7 @@ service, `/healthz`, `/mcp`).
 |---|---|---|
 | Python + MCP SDK | `app/server.py`, `app/policy.py` | The server and the gate. |
 | pytest | `app/tests/` | Policy rules and tool wiring, with the Azure SDK mocked. |
-| Terraform (azurerm 4) | `infra/` | All Azure resources, remote state, applied from a saved plan. |
+| Terraform (azurerm 4) | `infra/modules/solvent`, `infra/envs/` | One module, two environment roots. `prod` is applied from a saved plan; `dev` is planned in CI and never applied. |
 | Azure DevOps Pipelines | `pipelines/` | Lint/test → plan → build → approval → apply → smoke. Workload identity federation, no stored credentials. |
 | OpenTelemetry + Azure Monitor | `app/policy.py`, `app/server.py`, `infra/main.tf` | Audit log, metrics and traces in Application Insights; workbook, denial-burst and latency-SLO alerts, and an immutable export, all as Terraform. |
 | Container Apps + ACR | `infra/main.tf`, `Dockerfile` | Runs the image with a managed identity; scales to zero. |
@@ -44,8 +44,9 @@ service, `/healthz`, `/mcp`).
                 ▼
   Application Insights ──► Log Analytics ──► scheduled-query alert (>5 denied writes / 5 min)
 
-  infra/            Terraform: RG, Log Analytics, App Insights, ACR, Container Apps env + app,
-                    managed identity + RBAC, action group, alert rule
+  infra/modules/    Terraform module: RG, Log Analytics, App Insights, ACR, Container Apps env +
+                    app, managed identity + RBAC, action group, alerts, workbook, audit export
+  infra/envs/       prod (applied) and dev (planned in CI, never applied)
   pipelines/        Azure DevOps: Validate ──► Build ──► Deploy (environment approval gate)
 ```
 
@@ -183,9 +184,10 @@ Bootstrap, once:
 
 ```bash
 az login
-./infra/bootstrap.sh                      # registers providers, creates state storage, writes infra/backend.hcl
-cd infra && terraform init -backend-config=backend.hcl
-printf 'approval_secret = "%s"\nalert_email = "you@example.com"\nimage_tag = "bootstrap"\n' "$(openssl rand -hex 32)" > secret.auto.tfvars   # gitignored
+./infra/bootstrap.sh                      # registers providers, creates state storage, writes envs/*/backend.hcl
+cd infra/envs/prod && terraform init -backend-config=backend.hcl
+printf 'approval_secret = "%s"\napi_key = "%s"\napprovers = ""\nalert_email = "you@example.com"\nimage_tag = "bootstrap"\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > secret.auto.tfvars   # gitignored
 terraform apply -target=azurerm_container_registry.main   # registry first, image push needs it
 ACR=$(terraform output -raw acr_name); az acr login -n $ACR
 docker build --platform linux/amd64 -t $ACR.azurecr.io/solvent:bootstrap .. && docker push $ACR.azurecr.io/solvent:bootstrap
@@ -196,7 +198,8 @@ Azure DevOps, once:
 
 1. Service connection `solvent-azure`: ARM, workload identity federation. App registration has
    Contributor + User Access Administrator on the subscription.
-2. Variable group `solvent`: `AZURE_SERVICE_CONNECTION`, `APPROVAL_SECRET` (secret), `ALERT_EMAIL`.
+2. Variable group `solvent`: `AZURE_SERVICE_CONNECTION`, `APPROVAL_SECRET` and `API_KEY`
+   (both secret), `APPROVERS`, `ALERT_EMAIL`.
 3. Environment `prod` with an Approvals check.
 4. Pipeline from `pipelines/azure-pipelines.yml`, trigger on `main`, `*.md` excluded.
 
@@ -206,16 +209,23 @@ After that, every push to `main` deploys through the pipeline.
 
 **Validate.** Two parallel jobs.
 - app: `ruff`, `pytest` with JUnit results published.
-- infra: `terraform fmt -check`, `validate`, `tflint`, `terraform plan -out=tfplan` with
-  `image_tag = $(Build.SourceVersion)`. The plan is published as an artifact.
+- infra: `terraform fmt -check -recursive`, `tflint --recursive`, `checkov` (accepted findings
+  and their reasons live in `.checkov.yaml`), then `validate` and `terraform plan -out=tfplan`
+  on `envs/prod` with `image_tag = $(Build.SourceVersion)`. The plan is published as an artifact.
+- infra_dev: `terraform plan` on `envs/dev`, never applied — proof the module composes for a
+  second environment.
 
 **Build.** `docker build`, tag = git SHA, `docker push` to ACR after `az acr login` with the
 service connection identity.
 
 **Deploy.** Deployment job on environment `prod`; the approval check pauses the run until
 someone approves. Then `terraform apply` of the saved plan artifact, wait until
-`latestReadyRevisionName == latestRevisionName` on the Container App, `curl /healthz`, and an
-MCP `tools/list` asserting the three tools.
+`latestReadyRevisionName == latestRevisionName` on the Container App, `curl /healthz`, an
+MCP `tools/list` with the key asserting the three tools, and an unauthenticated `tools/list`
+asserting a 401 — the gate is proved closed, not assumed.
+
+A second pipeline, `pipelines/drift.yml`, runs `terraform plan -detailed-exitcode` nightly and
+fails if Azure has stopped matching the state file.
 
 Terraform authenticates with `ARM_USE_OIDC=true` and the `$idToken` from `AzureCLI@2`
 (`addSpnToEnvironment: true`). `pipelines/install-tools.yml` installs pinned Terraform and tflint;
@@ -268,6 +278,6 @@ immutability policy, so the record does not live only somewhere an operator can 
 - Approver identities are asserted by whoever holds `APPROVAL_SECRET`, not proven. The
   allow-list restricts *which* identity may be claimed, not that the claimant is that person.
 - Gating by data classification, as opposed to blast radius via per-tool approval windows.
-- Second environment via Terraform modules, `dev` stage without approval.
+- A *live* `dev` environment. `dev` is planned in CI from the same module, never applied.
 - The audit export's immutability policy is `Unlocked`, so it is reversible. A regulated
   deployment would lock it and accept that the retention window is then permanent.

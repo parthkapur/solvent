@@ -14,10 +14,17 @@ az group create -n "$RG" -l "$LOC" -o none
 az storage account create -n "$SA" -g "$RG" -l "$LOC" --sku Standard_LRS --allow-blob-public-access false -o none
 az storage container create -n tfstate --account-name "$SA" --auth-mode login -o none
 
-cat > "$(dirname "$0")/backend.hcl" <<HCL
+# One backend file per environment root; same container, different state key.
+for env in prod dev; do
+  case "$env" in
+    prod) KEY=solvent.tfstate ;;   # unchanged from the pre-module layout
+    dev) KEY=dev.tfstate ;;
+  esac
+  cat > "$(dirname "$0")/envs/$env/backend.hcl" <<HCL
 resource_group_name  = "$RG"
 storage_account_name = "$SA"
 container_name       = "tfstate"
-key                  = "solvent.tfstate"
+key                  = "$KEY"
 HCL
-echo "wrote backend.hcl -> $SA"
+done
+echo "wrote envs/{prod,dev}/backend.hcl -> $SA"
