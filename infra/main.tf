@@ -272,3 +272,82 @@ resource "azurerm_role_assignment" "self_contributor" {
   role_definition_name = "Contributor"
   principal_id         = azurerm_user_assigned_identity.app.principal_id
 }
+
+# --- dashboard ---------------------------------------------------------------
+
+# The queries an operator actually runs, in a diff rather than pasted into a portal blade.
+# Workbook names must be a GUID; a literal keeps the resource stable across applies.
+resource "azurerm_application_insights_workbook" "controls" {
+  name                = "7f3b0c6e-4a21-4c9d-9b8e-2f5a1d6c0e11"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  display_name        = "Solvent - controls"
+  source_id           = lower(azurerm_application_insights.main.id)
+  tags                = local.tags
+
+  data_json = jsonencode({
+    version = "Notebook/1.0"
+    items = [
+      {
+        type = 1
+        content = {
+          json = "## Solvent controls\nEvery decision the gate has made. Defined in `infra/main.tf`."
+        }
+      },
+      {
+        type = 3
+        content = {
+          version       = "KqlItem/1.0"
+          size          = 0
+          title         = "Calls by tool and decision (24h)"
+          queryType     = 0
+          visualization = "barchart"
+          query         = <<-KQL
+            AppTraces
+            | where TimeGenerated > ago(24h) and isnotempty(Properties.decision)
+            | summarize calls = count() by tool = tostring(Properties.tool), decision = tostring(Properties.decision)
+            | order by calls desc
+          KQL
+        }
+      },
+      {
+        type = 3
+        content = {
+          version       = "KqlItem/1.0"
+          size          = 0
+          title         = "Denials, with the reason and who tried"
+          queryType     = 0
+          visualization = "table"
+          query         = <<-KQL
+            AppTraces
+            | where TimeGenerated > ago(24h) and tostring(Properties.decision) == "denied"
+            | project TimeGenerated,
+                      tool = tostring(Properties.tool),
+                      reason = tostring(Properties.reason),
+                      approved_by = tostring(Properties.approved_by)
+            | order by TimeGenerated desc
+          KQL
+        }
+      },
+      {
+        type = 3
+        content = {
+          version       = "KqlItem/1.0"
+          size          = 0
+          title         = "Approved writes - who approved what"
+          queryType     = 0
+          visualization = "table"
+          query         = <<-KQL
+            AppTraces
+            | where tostring(Properties.reason) == "approved"
+            | project TimeGenerated,
+                      tool = tostring(Properties.tool),
+                      approved_by = tostring(Properties.approved_by),
+                      args_hash = tostring(Properties.args_hash)
+            | order by TimeGenerated desc
+          KQL
+        }
+      },
+    ]
+  })
+}

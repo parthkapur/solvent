@@ -24,7 +24,7 @@ service, `/healthz`, `/mcp`).
 | pytest | `app/tests/` | Policy rules and tool wiring, with the Azure SDK mocked. |
 | Terraform (azurerm 4) | `infra/` | All Azure resources, remote state, applied from a saved plan. |
 | Azure DevOps Pipelines | `pipelines/` | Lint/test → plan → build → approval → apply → smoke. Workload identity federation, no stored credentials. |
-| OpenTelemetry + Azure Monitor | `app/policy.py`, `app/server.py`, `infra/main.tf` | Audit log, metrics and traces in Application Insights; alert rule on denied-write bursts. |
+| OpenTelemetry + Azure Monitor | `app/policy.py`, `app/server.py`, `infra/main.tf` | Audit log, metrics and traces in Application Insights; workbook, denial-burst and latency-SLO alerts, and an immutable export, all as Terraform. |
 | Container Apps + ACR | `infra/main.tf`, `Dockerfile` | Runs the image with a managed identity; scales to zero. |
 
 ## Architecture
@@ -244,8 +244,18 @@ AppMetrics
 | summarize sum(Sum) by tool=tostring(Properties.tool), decision=tostring(Properties.decision)
 ```
 
-Alert: `azurerm_monitor_scheduled_query_rules_alert_v2`, more than 5 denied writes in 5 minutes,
-email via action group.
+Those three queries are the **workbook**, deployed from `infra/main.tf`
+(`azurerm_application_insights_workbook`). Open App Insights > Workbooks > "Solvent - controls"
+rather than pasting KQL.
+
+Alerts, both `azurerm_monitor_scheduled_query_rules_alert_v2`, email via one action group:
+
+- more than 5 denials in 5 minutes — any refusal, including unauthenticated probes;
+- 15-minute p95 of `mcp.tool.latency_ms` over 2s, the SLO. The gate is microseconds, so this
+  fires on the Azure dependency, not on the policy layer.
+
+The audit trail is also exported out of Log Analytics to a storage account with an
+immutability policy, so the record does not live only somewhere an operator can edit it.
 
 ## Not implemented
 
@@ -258,6 +268,6 @@ email via action group.
 - Approver identities are asserted by whoever holds `APPROVAL_SECRET`, not proven. The
   allow-list restricts *which* identity may be claimed, not that the claimant is that person.
 - Gating by data classification, as opposed to blast radius via per-tool approval windows.
-- SLO burn-rate alerts on `mcp.tool.latency_ms`; dashboard as code.
 - Second environment via Terraform modules, `dev` stage without approval.
-- An immutable copy of the audit trail; the Log Analytics workspace is the only store.
+- The audit export's immutability policy is `Unlocked`, so it is reversible. A regulated
+  deployment would lock it and accept that the retention window is then permanent.

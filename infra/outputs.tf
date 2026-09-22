@@ -9,3 +9,7 @@ output "acr_name" {
 output "audit_storage_account" {
   value = azurerm_storage_account.audit.name
 }
+
+output "workbook_id" {
+  value = azurerm_application_insights_workbook.controls.id
+}
