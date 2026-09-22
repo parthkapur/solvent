@@ -76,7 +76,7 @@ resource "azurerm_monitor_action_group" "main" {
   }
 }
 
-# Fires when the AI side keeps hitting the gate: >5 denied writes in 5 minutes.
+# Fires when something keeps hitting the gate: >5 denials in 5 minutes.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "denied_writes" {
   name                 = "${var.project}-denied-writes"
   resource_group_name  = azurerm_resource_group.main.name
@@ -86,6 +86,8 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "denied_writes" {
   evaluation_frequency = "PT5M"
   window_duration      = "PT5M"
   criteria {
+    # Any refusal: a denied write, an unlisted approver, a replayed token, or an
+    # unauthenticated request. Bursts mean something is hammering the gate.
     query                   = <<-KQL
       AppTraces
       | where tostring(Properties.decision) == "denied"
@@ -97,6 +99,38 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "denied_writes" {
   action {
     action_groups = [azurerm_monitor_action_group.main.id]
   }
+  tags = local.tags
+}
+
+# Objective: a tool call answers in under 2s. The gate itself is microseconds, so anything
+# slow is Azure upstream - this fires on the dependency, not on the policy layer.
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "latency_slo" {
+  name                 = "${var.project}-latency-slo"
+  resource_group_name  = azurerm_resource_group.main.name
+  location             = azurerm_resource_group.main.location
+  scopes               = [azurerm_log_analytics_workspace.main.id]
+  severity             = 3
+  evaluation_frequency = "PT5M"
+  window_duration      = "PT15M"
+
+  criteria {
+    # AppMetrics stores pre-aggregated buckets, so this is p95 over each bucket's max - an
+    # upper bound on the real p95, which is the safe direction to be wrong in for an SLO.
+    query                   = <<-KQL
+      AppMetrics
+      | where Name == "mcp.tool.latency_ms"
+      | summarize p95 = percentile(Max, 95)
+    KQL
+    time_aggregation_method = "Maximum"
+    metric_measure_column   = "p95"
+    operator                = "GreaterThan"
+    threshold               = 2000
+  }
+
+  action {
+    action_groups = [azurerm_monitor_action_group.main.id]
+  }
+
   tags = local.tags
 }
 
