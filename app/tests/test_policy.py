@@ -4,7 +4,7 @@ import logging
 
 from app import policy
 
-POLICY = {"read_tool": "read", "write_tool": "write"}
+POLICY = policy.Policy({"read_tool": "read", "write_tool": "write"})
 SECRET = "s3cret"
 
 
@@ -111,3 +111,32 @@ def test_tampered_timestamp_denied():
 def test_malformed_token_denied():
     args = {"name": "x", "approval_token": "garbage"}
     assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required")
+
+
+def test_policy_ttl_defaults_and_overrides():
+    p = policy.Policy({"write_tool": "write"}, {"write_tool": 120})
+    assert p.ttl("write_tool") == 120
+    assert p.ttl("other") == policy.TOKEN_TTL_S
+    assert p.max_ttl == policy.TOKEN_TTL_S  # a shorter override never shrinks the prune window
+
+
+def test_policy_max_ttl_tracks_the_longest_window():
+    assert policy.Policy({}, {"slow": 9000}).max_ttl == 9000
+
+
+def test_load_policy_reads_all_three_blocks(tmp_path):
+    f = tmp_path / "policy.yaml"
+    f.write_text(
+        "tools:\n  a: read\n  b: write\nttl_s:\n  b: 120\napprovers:\n  - ops@example.com\n"
+    )
+    p = policy.load_policy(f)
+    assert p.tools == {"a": "read", "b": "write"}
+    assert p.ttl("b") == 120
+    assert p.approvers == ("ops@example.com",)
+
+
+def test_load_policy_tolerates_missing_optional_blocks(tmp_path):
+    f = tmp_path / "policy.yaml"
+    f.write_text("tools:\n  a: read\n")
+    p = policy.load_policy(f)
+    assert p.ttl_s == {} and p.approvers == ()

@@ -4,3 +4,12 @@ tools:
   get_cost_summary: read
   get_resource_health: read
   restart_container_app: write
+
+# How long an approval stays good, per tool. Bigger blast radius, shorter window.
+# Anything not listed gets TOKEN_TTL_S (600s).
+ttl_s:
+  restart_container_app: 120
+
+# Who may mint an approval. Empty means anyone holding APPROVAL_SECRET, which is
+# what local development wants. Terraform sets APPROVERS in the deployed app.
+approvers: []

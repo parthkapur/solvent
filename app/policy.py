@@ -7,8 +7,10 @@ import json
 import logging
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, NamedTuple
 
 import yaml
 from opentelemetry import metrics, trace
@@ -20,8 +22,29 @@ _calls = _meter.create_counter("mcp.tool.calls", description="tool calls by deci
 _latency = _meter.create_histogram("mcp.tool.latency_ms", unit="ms")
 
 
-def load_policy(path: Path = POLICY_PATH) -> dict[str, str]:
-    return yaml.safe_load(path.read_text())["tools"]
+
+class Policy(NamedTuple):
+    """The three things that always travel together: what is gated, how long, and by whom."""
+
+    tools: dict[str, str]
+    ttl_s: Mapping[str, int] = MappingProxyType({})
+    approvers: tuple[str, ...] = ()
+
+    def ttl(self, tool: str) -> int:
+        return self.ttl_s.get(tool, TOKEN_TTL_S)
+
+    @property
+    def max_ttl(self) -> int:
+        """The longest window any tool allows - how far back replay bookkeeping must remember."""
+        return max([TOKEN_TTL_S, *self.ttl_s.values()])
+
+
+def load_policy(path: Path = POLICY_PATH) -> Policy:
+    raw = yaml.safe_load(path.read_text())
+    # APPROVERS is set per environment by Terraform; the file is the default.
+    env = [a.strip() for a in os.environ.get("APPROVERS", "").split(",") if a.strip()]
+    approvers = tuple(env) or tuple(raw.get("approvers") or ())
+    return Policy(raw["tools"], raw.get("ttl_s") or {}, approvers)
 
 
 POLICY = load_policy()
@@ -44,11 +67,11 @@ def mint_token(tool: str, args: dict[str, Any], secret: str, now: float | None =
 def decide(
     tool: str,
     args: dict[str, Any],
-    policy: dict[str, str],
+    policy: Policy,
     secret: str,
     now: float | None = None,
 ) -> tuple[str, str]:
-    cls = policy.get(tool)
+    cls = policy.tools.get(tool)
     if cls is None:
         return "denied", "not_in_policy"
     if cls == "read":
