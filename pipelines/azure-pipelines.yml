@@ -8,7 +8,7 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
-  - group: solvent # AZURE_SERVICE_CONNECTION, APPROVAL_SECRET (secret), ALERT_EMAIL
+  - group: solvent # AZURE_SERVICE_CONNECTION, APPROVAL_SECRET + API_KEY (secret), APPROVERS, ALERT_EMAIL
   - name: TF_IN_AUTOMATION
     value: "true"
 
@@ -53,6 +53,8 @@ stages:
                 terraform plan -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan \
                   -var image_tag=$(Build.SourceVersion) \
                   -var approval_secret=$(APPROVAL_SECRET) \
+                  -var api_key=$(API_KEY) \
+                  -var approvers=$(APPROVERS) \
                   -var alert_email=$(ALERT_EMAIL)
           - publish: $(Build.ArtifactStagingDirectory)/tfplan
             artifact: tfplan
@@ -114,5 +116,12 @@ stages:
                       curl -fsS "$URL/healthz"
                       curl -fsS -X POST "$URL/mcp" \
                         -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+                        -H "authorization: Bearer $(API_KEY)" \
                         -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
                         | grep -q restart_container_app && echo "smoke ok"
+                      # Prove the gate is closed rather than assuming it.
+                      code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/mcp" \
+                        -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+                        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+                      [ "$code" = "401" ] || { echo "/mcp answered $code unauthenticated, expected 401"; exit 1; }
+                      echo "auth gate ok"

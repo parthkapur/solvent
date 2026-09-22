@@ -137,6 +137,10 @@ resource "azurerm_container_app" "main" {
     name  = "approval-secret"
     value = var.approval_secret
   }
+  secret {
+    name  = "api-key"
+    value = var.api_key
+  }
 
   template {
     min_replicas = 0
@@ -153,6 +157,14 @@ resource "azurerm_container_app" "main" {
       env {
         name        = "APPROVAL_SECRET"
         secret_name = "approval-secret"
+      }
+      env {
+        name        = "API_KEY"
+        secret_name = "api-key"
+      }
+      env {
+        name  = "APPROVERS"
+        value = var.approvers
       }
       env {
         name  = "AZURE_CLIENT_ID"
