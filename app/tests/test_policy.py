@@ -268,3 +268,66 @@ def test_env_var_overrides_the_file(tmp_path, monkeypatch):
     f.write_text("tools:\n  a: read\napprovers:\n  - file@example.com\n")
     monkeypatch.setenv("APPROVERS", "env1@example.com, env2@example.com")
     assert policy.load_policy(f).approvers == ("env1@example.com", "env2@example.com")
+
+
+def test_token_is_single_use():
+    consumed: dict[str, int] = {}
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    args = {"name": "x", "approval_token": tok}
+    first = policy.decide("write_tool", args, POLICY, SECRET, consumed=consumed)
+    second = policy.decide("write_tool", args, POLICY, SECRET, consumed=consumed)
+    assert first == ("allowed", "approved", APPROVER)
+    assert second == ("denied", "approval_replayed", APPROVER)
+
+
+def test_replay_check_is_opt_in():
+    """decide() with no ledger is a pure decision - the same token verifies twice."""
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET)[:2] == ("allowed", "approved")
+    assert policy.decide("write_tool", args, POLICY, SECRET)[:2] == ("allowed", "approved")
+
+
+def test_expired_beats_replayed():
+    """An old token reads as expired, not as a replay - the earlier check wins."""
+    consumed: dict[str, int] = {}
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000)
+    args = {"name": "x", "approval_token": tok}
+    assert (
+        policy.decide("write_tool", args, POLICY, SECRET, now=1601, consumed=consumed)[1]
+        == "approval_expired"
+    )
+    assert consumed == {}  # an expired token must not burn a ledger slot
+
+
+def test_consumed_ledger_is_pruned():
+    consumed: dict[str, int] = {}
+    old = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000)
+    policy.decide(
+        "write_tool", {"name": "x", "approval_token": old}, POLICY, SECRET,
+        now=1000, consumed=consumed,
+    )
+    assert len(consumed) == 1
+    fresh = policy.mint_token("write_tool", {"name": "y"}, SECRET, APPROVER, now=9000)
+    policy.decide(
+        "write_tool", {"name": "y", "approval_token": fresh}, POLICY, SECRET,
+        now=9000, consumed=consumed,
+    )
+    assert len(consumed) == 1  # the 1000s entry aged out of every possible window
+
+
+def test_governed_rejects_a_replayed_token(monkeypatch):
+    monkeypatch.setattr(policy, "POLICY", POLICY)
+    monkeypatch.setattr(policy, "_CONSUMED", {})
+    monkeypatch.setenv("APPROVAL_SECRET", SECRET)
+
+    @policy.governed
+    def write_tool(name: str, approval_token: str = "") -> dict:
+        return {"restarted": name}
+
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    assert write_tool(name="x", approval_token=tok) == {"restarted": "x"}
+    assert write_tool(name="x", approval_token=tok) == {
+        "denied": True,
+        "reason": "approval_replayed",
+    }

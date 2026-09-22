@@ -49,6 +49,22 @@ def load_policy(path: Path = POLICY_PATH) -> Policy:
 
 POLICY = load_policy()
 
+# ponytail: in-process nonce ledger - correct at max_replicas = 1, and it empties on a cold
+# start, so a token can still be replayed across a restart inside its window. Move to an
+# Azure Table keyed by signature if the app is ever scaled out.
+_CONSUMED: dict[str, int] = {}
+
+
+def _consume(sig: str, ts: int, now: float, consumed: dict[str, int], max_ttl: int) -> bool:
+    """True the first time a signature is seen. Drops entries no live token could still hold."""
+    for s, t in list(consumed.items()):
+        if t < now - max_ttl:
+            del consumed[s]
+    if sig in consumed:
+        return False
+    consumed[sig] = ts
+    return True
+
 
 def canonical(args: dict[str, Any]) -> str:
     return json.dumps(args, sort_keys=True, separators=(",", ":"), default=str)
@@ -77,6 +93,7 @@ def decide(
     policy: Policy,
     secret: str,
     now: float | None = None,
+    consumed: dict[str, int] | None = None,
 ) -> tuple[str, str, str]:
     """(decision, reason, approved_by). approved_by is "" until a signature has verified."""
     cls = policy.tools.get(tool)
@@ -98,6 +115,10 @@ def decide(
         return "denied", "approver_not_authorized", approver
     if (now if now is not None else time.time()) - int(ts) > policy.ttl(tool):
         return "denied", "approval_expired", approver
+    if consumed is not None and not _consume(
+        sig, int(ts), now if now is not None else time.time(), consumed, policy.max_ttl
+    ):
+        return "denied", "approval_replayed", approver
     return "allowed", "approved", approver
 
 
@@ -112,7 +133,7 @@ def governed(fn):
     def wrapper(**kwargs: Any) -> dict[str, Any]:
         start = time.perf_counter()
         decision, reason, approved_by = decide(
-            tool, kwargs, POLICY, os.environ.get("APPROVAL_SECRET", "")
+            tool, kwargs, POLICY, os.environ.get("APPROVAL_SECRET", ""), consumed=_CONSUMED
         )
         try:
             if decision != "allowed":
