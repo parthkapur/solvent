@@ -230,3 +230,41 @@ def test_audit_omits_approver_for_reads(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="solvent.audit"):
         read_tool()
     assert "approved_by" not in json.loads(caplog.records[-1].message)
+
+
+def test_unlisted_approver_denied():
+    p = policy.Policy({"write_tool": "write"}, {}, ("ops@example.com",))
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, "intern@example.com")
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, p, SECRET) == (
+        "denied",
+        "approver_not_authorized",
+        "intern@example.com",
+    )
+
+
+def test_listed_approver_allowed():
+    p = policy.Policy({"write_tool": "write"}, {}, ("ops@example.com",))
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, "ops@example.com")
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, p, SECRET)[:2] == ("allowed", "approved")
+
+
+def test_empty_allow_list_permits_any_identity():
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, "anyone@example.com")
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET)[:2] == ("allowed", "approved")
+
+
+def test_allow_list_is_checked_after_the_signature():
+    """An unsigned claim must never reveal who is on the list."""
+    p = policy.Policy({"write_tool": "write"}, {}, ("ops@example.com",))
+    args = {"name": "x", "approval_token": "deadbeef.1700000000.ops@example.com"}
+    assert policy.decide("write_tool", args, p, SECRET) == ("denied", "approval_required", "")
+
+
+def test_env_var_overrides_the_file(tmp_path, monkeypatch):
+    f = tmp_path / "policy.yaml"
+    f.write_text("tools:\n  a: read\napprovers:\n  - file@example.com\n")
+    monkeypatch.setenv("APPROVERS", "env1@example.com, env2@example.com")
+    assert policy.load_policy(f).approvers == ("env1@example.com", "env2@example.com")

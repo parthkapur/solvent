@@ -94,6 +94,8 @@ def decide(
     if not hmac.compare_digest(sig, expected.partition(".")[0]):
         return "denied", "approval_required", ""
     # Past this line the identity is signed, so it is safe to name it in a denial.
+    if policy.approvers and approver not in policy.approvers:
+        return "denied", "approver_not_authorized", approver
     if (now if now is not None else time.time()) - int(ts) > policy.ttl(tool):
         return "denied", "approval_expired", approver
     return "allowed", "approved", approver
