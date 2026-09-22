@@ -6,39 +6,41 @@ from app import policy
 
 POLICY = policy.Policy({"read_tool": "read", "write_tool": "write"})
 SECRET = "s3cret"
+APPROVER = "ops@example.com"
 
 
 def test_read_allowed():
-    assert policy.decide("read_tool", {}, POLICY, SECRET) == ("allowed", "read")
+    assert policy.decide("read_tool", {}, POLICY, SECRET) == ("allowed", "read", "")
 
 
 def test_unknown_tool_denied():
-    assert policy.decide("nope", {}, POLICY, SECRET) == ("denied", "not_in_policy")
+    assert policy.decide("nope", {}, POLICY, SECRET) == ("denied", "not_in_policy", "")
 
 
 def test_write_without_token_denied():
     assert policy.decide("write_tool", {"name": "x"}, POLICY, SECRET) == (
         "denied",
         "approval_required",
+        "",
     )
 
 
 def test_write_with_valid_token_allowed():
-    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET)
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
     args = {"name": "x", "approval_token": tok}
-    assert policy.decide("write_tool", args, POLICY, SECRET) == ("allowed", "approved")
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("allowed", "approved", APPROVER)
 
 
 def test_tampered_args_denied():
-    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET)
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
     args = {"name": "y", "approval_token": tok}
-    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required")
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required", "")
 
 
 def test_no_secret_denies_writes():
-    tok = policy.mint_token("write_tool", {"name": "x"}, "")
+    tok = policy.mint_token("write_tool", {"name": "x"}, "", APPROVER)
     args = {"name": "x", "approval_token": tok}
-    assert policy.decide("write_tool", args, POLICY, "") == ("denied", "no_approval_secret")
+    assert policy.decide("write_tool", args, POLICY, "") == ("denied", "no_approval_secret", "")
 
 
 def test_governed_emits_audit(monkeypatch, caplog):
@@ -51,7 +53,7 @@ def test_governed_emits_audit(monkeypatch, caplog):
 
     with caplog.at_level(logging.INFO, logger="solvent.audit"):
         denied = write_tool(name="x")
-        tok = policy.mint_token("write_tool", {"name": "x"}, SECRET)
+        tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
         ok = write_tool(name="x", approval_token=tok)
 
     assert denied == {"denied": True, "reason": "approval_required"}
@@ -61,6 +63,7 @@ def test_governed_emits_audit(monkeypatch, caplog):
     assert set(events[0]) == {
         "ts", "tool", "args_hash", "decision", "reason", "latency_ms", "trace_id", "span_id",
     }
+    assert set(events[1]) == set(events[0]) | {"approved_by"}
     assert events[0]["tool"] == "write_tool"
     assert events[0]["args_hash"] == events[1]["args_hash"]  # token excluded from hash
 
@@ -77,9 +80,18 @@ def test_approve_cli(monkeypatch, capsys):
     from app import approve
 
     monkeypatch.setenv("APPROVAL_SECRET", SECRET)
-    approve.main(["write_tool", "name=x"])
+    approve.main(["--approver", APPROVER, "write_tool", "name=x"])
     out = capsys.readouterr().out.strip()
-    assert out == policy.mint_token("write_tool", {"name": "x"}, SECRET)
+    assert out == policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+
+
+def test_approve_cli_defaults_to_the_signed_in_user(monkeypatch, capsys):
+    from app import approve
+
+    monkeypatch.setenv("APPROVAL_SECRET", SECRET)
+    monkeypatch.setattr(approve, "signed_in_user", lambda: APPROVER)
+    approve.main(["write_tool", "name=x"])
+    assert capsys.readouterr().out.strip().split(".", 2)[2] == APPROVER
 
 
 def test_governed_returns_exception_as_data(monkeypatch, caplog):
@@ -96,21 +108,35 @@ def test_governed_returns_exception_as_data(monkeypatch, caplog):
 
 
 def test_expired_token_denied():
-    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, now=1000)
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000)
     args = {"name": "x", "approval_token": tok}
-    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000 + 599) == ("allowed", "approved")
-    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000 + 601) == ("denied", "approval_expired")
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1599) == (
+        "allowed",
+        "approved",
+        APPROVER,
+    )
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1601) == (
+        "denied",
+        "approval_expired",
+        APPROVER,
+    )
 
 
 def test_tampered_timestamp_denied():
-    sig, ts = policy.mint_token("write_tool", {"name": "x"}, SECRET, now=1000).split(".")
-    args = {"name": "x", "approval_token": f"{sig}.{int(ts) + 3600}"}
-    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000) == ("denied", "approval_required")
+    sig, ts, who = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000).split(
+        ".", 2
+    )
+    args = {"name": "x", "approval_token": f"{sig}.{int(ts) + 3600}.{who}"}
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000) == (
+        "denied",
+        "approval_required",
+        "",
+    )
 
 
 def test_malformed_token_denied():
     args = {"name": "x", "approval_token": "garbage"}
-    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required")
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required", "")
 
 
 def test_policy_ttl_defaults_and_overrides():
@@ -122,6 +148,17 @@ def test_policy_ttl_defaults_and_overrides():
 
 def test_policy_max_ttl_tracks_the_longest_window():
     assert policy.Policy({}, {"slow": 9000}).max_ttl == 9000
+
+
+def test_per_tool_ttl_is_enforced():
+    p = policy.Policy({"write_tool": "write"}, {"write_tool": 120})
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, p, SECRET, now=1119)[:2] == ("allowed", "approved")
+    assert policy.decide("write_tool", args, p, SECRET, now=1121)[:2] == (
+        "denied",
+        "approval_expired",
+    )
 
 
 def test_load_policy_reads_all_three_blocks(tmp_path):
@@ -140,3 +177,56 @@ def test_load_policy_tolerates_missing_optional_blocks(tmp_path):
     f.write_text("tools:\n  a: read\n")
     p = policy.load_policy(f)
     assert p.ttl_s == {} and p.approvers == ()
+
+
+def test_token_carries_the_approver():
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    assert tok.split(".", 2)[2] == APPROVER
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("allowed", "approved", APPROVER)
+
+
+def test_approver_with_dots_survives_the_split():
+    who = "first.last@sub.example.co.uk"
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, who)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("allowed", "approved", who)
+
+
+def test_swapped_approver_denied():
+    """The identity is inside the signed message, so it cannot be relabelled."""
+    sig, ts, _ = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER).split(".", 2)
+    args = {"name": "x", "approval_token": f"{sig}.{ts}.someone.else@example.com"}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required", "")
+
+
+def test_token_without_approver_denied():
+    args = {"name": "x", "approval_token": "deadbeef.1700000000"}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required", "")
+
+
+def test_audit_names_the_approver(monkeypatch, caplog):
+    monkeypatch.setattr(policy, "POLICY", POLICY)
+    monkeypatch.setenv("APPROVAL_SECRET", SECRET)
+
+    @policy.governed
+    def write_tool(name: str, approval_token: str = "") -> dict:
+        return {"restarted": name}
+
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    with caplog.at_level(logging.INFO, logger="solvent.audit"):
+        write_tool(name="x", approval_token=tok)
+    ev = json.loads(caplog.records[-1].message)
+    assert ev["approved_by"] == APPROVER
+
+
+def test_audit_omits_approver_for_reads(monkeypatch, caplog):
+    monkeypatch.setattr(policy, "POLICY", POLICY)
+
+    @policy.governed
+    def read_tool() -> dict:
+        return {}
+
+    with caplog.at_level(logging.INFO, logger="solvent.audit"):
+        read_tool()
+    assert "approved_by" not in json.loads(caplog.records[-1].message)

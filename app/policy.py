@@ -57,11 +57,18 @@ def canonical(args: dict[str, Any]) -> str:
 TOKEN_TTL_S = 600  # an approval is for "now", not forever
 
 
-def mint_token(tool: str, args: dict[str, Any], secret: str, now: float | None = None) -> str:
-    """Return "<hmac>.<unix_ts>". The timestamp is signed, so it cannot be moved."""
+def mint_token(
+    tool: str, args: dict[str, Any], secret: str, approver: str, now: float | None = None
+) -> str:
+    """Return "<hmac>.<unix_ts>.<approver>".
+
+    The timestamp and the approver are both inside the signed message, so neither can be
+    moved nor relabelled. The approver goes last so an identity containing dots survives
+    the split.
+    """
     ts = int(now if now is not None else time.time())
-    msg = f"{tool}:{canonical(args)}:{ts}".encode()
-    return f"{hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()}.{ts}"
+    msg = f"{tool}:{canonical(args)}:{approver}:{ts}".encode()
+    return f"{hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()}.{ts}.{approver}"
 
 
 def decide(
@@ -70,23 +77,26 @@ def decide(
     policy: Policy,
     secret: str,
     now: float | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
+    """(decision, reason, approved_by). approved_by is "" until a signature has verified."""
     cls = policy.tools.get(tool)
     if cls is None:
-        return "denied", "not_in_policy"
+        return "denied", "not_in_policy", ""
     if cls == "read":
-        return "allowed", "read"
+        return "allowed", "read", ""
     if not secret:
-        return "denied", "no_approval_secret"
-    sig, _, ts = str(args.get("approval_token", "")).partition(".")
-    if not ts.isdigit():
-        return "denied", "approval_required"
-    expected = mint_token(tool, _without_token(args), secret, now=int(ts))
+        return "denied", "no_approval_secret", ""
+    sig, _, rest = str(args.get("approval_token", "")).partition(".")
+    ts, _, approver = rest.partition(".")
+    if not ts.isdigit() or not approver:
+        return "denied", "approval_required", ""
+    expected = mint_token(tool, _without_token(args), secret, approver, now=int(ts))
     if not hmac.compare_digest(sig, expected.partition(".")[0]):
-        return "denied", "approval_required"
-    if (now if now is not None else time.time()) - int(ts) > TOKEN_TTL_S:
-        return "denied", "approval_expired"
-    return "allowed", "approved"
+        return "denied", "approval_required", ""
+    # Past this line the identity is signed, so it is safe to name it in a denial.
+    if (now if now is not None else time.time()) - int(ts) > policy.ttl(tool):
+        return "denied", "approval_expired", approver
+    return "allowed", "approved", approver
 
 
 def _without_token(args: dict[str, Any]) -> dict[str, Any]:
@@ -99,7 +109,9 @@ def governed(fn):
     @functools.wraps(fn)
     def wrapper(**kwargs: Any) -> dict[str, Any]:
         start = time.perf_counter()
-        decision, reason = decide(tool, kwargs, POLICY, os.environ.get("APPROVAL_SECRET", ""))
+        decision, reason, approved_by = decide(
+            tool, kwargs, POLICY, os.environ.get("APPROVAL_SECRET", "")
+        )
         try:
             if decision != "allowed":
                 return {"denied": True, "reason": reason}
@@ -109,25 +121,42 @@ def governed(fn):
                 reason = f"error:{type(e).__name__}"
                 return {"error": str(e).splitlines()[0][:300]}
         finally:
-            _record(tool, kwargs, decision, reason, (time.perf_counter() - start) * 1000)
+            _record(
+                tool, kwargs, decision, reason, (time.perf_counter() - start) * 1000, approved_by
+            )
 
     return wrapper
 
 
-def _record(
-    tool: str, args: dict[str, Any], decision: str, reason: str, latency_ms: float
-) -> None:
+def audit_event(**fields: Any) -> None:
+    """One audit line, trace-correlated. Used for calls that never reached a tool too."""
     ctx = trace.get_current_span().get_span_context()
     event = {
         "ts": time.time(),
+        **fields,
+        "trace_id": format(ctx.trace_id, "032x"),
+        "span_id": format(ctx.span_id, "016x"),
+    }
+    _audit.info(json.dumps(event), extra=event)
+
+
+def _record(
+    tool: str,
+    args: dict[str, Any],
+    decision: str,
+    reason: str,
+    latency_ms: float,
+    approved_by: str = "",
+) -> None:
+    event = {
         "tool": tool,
         "args_hash": hashlib.sha256(canonical(_without_token(args)).encode()).hexdigest()[:16],
         "decision": decision,
         "reason": reason,
         "latency_ms": round(latency_ms, 2),
-        "trace_id": format(ctx.trace_id, "032x"),
-        "span_id": format(ctx.span_id, "016x"),
     }
-    _audit.info(json.dumps(event), extra=event)
+    if approved_by:
+        event["approved_by"] = approved_by
+    audit_event(**event)
     _calls.add(1, {"tool": tool, "decision": decision})
     _latency.record(latency_ms, {"tool": tool})

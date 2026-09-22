@@ -6,6 +6,7 @@ import pytest
 from app import azure_clients, policy, server
 
 SECRET = "s3cret"
+APPROVER = "ops@example.com"
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +39,7 @@ async def test_write_tool_denied_without_token():
 
 
 async def test_write_tool_allowed_with_token():
-    tok = policy.mint_token("restart_container_app", {"name": "x"}, SECRET)
+    tok = policy.mint_token("restart_container_app", {"name": "x"}, SECRET, APPROVER)
     r = await server.mcp.call_tool("restart_container_app", {"name": "x", "approval_token": tok})
     assert r.structured_content == {"restarted": "x"}
 
