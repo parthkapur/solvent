@@ -1,5 +1,6 @@
 """Solvent: an MCP server whose write tools are gated by human approval."""
 
+import hmac
 import logging
 import os
 from typing import Any
@@ -10,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app import azure_clients as az
-from app.policy import governed
+from app.policy import audit_event, governed
 
 if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
     from azure.monitor.opentelemetry import configure_azure_monitor
@@ -66,9 +67,35 @@ async def healthz(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+API_KEY = os.environ.get("API_KEY", "")
+
+
+def require_key(asgi):
+    """Bearer-key guard over /mcp. / and /healthz stay open for probes and the smoke test.
+
+    ponytail: one shared key, so the audit log names the approver but not the caller.
+    Upgrade path is an Entra-issued JWT verified against the tenant JWKS.
+    """
+
+    async def guard(scope, receive, send):
+        if scope["type"] == "http" and API_KEY and scope["path"].startswith("/mcp"):
+            offered = dict(scope["headers"]).get(b"authorization", b"").decode()
+            if not hmac.compare_digest(offered, f"Bearer {API_KEY}"):
+                audit_event(tool="mcp", decision="denied", reason="unauthenticated")
+                await JSONResponse({"denied": True, "reason": "unauthenticated"}, status_code=401)(
+                    scope, receive, send
+                )
+                return
+        await asgi(scope, receive, send)
+
+    return guard
+
+
 # Public service behind Container Apps ingress; DNS-rebinding protection is for localhost servers.
-app = mcp.streamable_http_app(
-    stateless_http=True,
-    json_response=True,
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+app = require_key(
+    mcp.streamable_http_app(
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
 )

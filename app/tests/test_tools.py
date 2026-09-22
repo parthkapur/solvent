@@ -9,6 +9,19 @@ SECRET = "s3cret"
 APPROVER = "ops@example.com"
 
 
+@pytest.fixture(scope="module")
+def http():
+    """One client for the whole module.
+
+    `streamable_http_app`'s session manager refuses a second `run()`, and TestClient only
+    starts the lifespan as a context manager, so entering it per-test breaks the suite.
+    """
+    from starlette.testclient import TestClient
+
+    with TestClient(server.app) as client:
+        yield client
+
+
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("APPROVAL_SECRET", SECRET)
@@ -44,9 +57,50 @@ async def test_write_tool_allowed_with_token():
     assert r.structured_content == {"restarted": "x"}
 
 
-async def test_healthz():
-    from starlette.testclient import TestClient
+async def test_healthz(http):
+    assert http.get("/healthz").json() == {"ok": True}
+    assert http.get("/").json()["endpoints"]["health"] == "/healthz"
 
-    client = TestClient(server.app)
-    assert client.get("/healthz").json() == {"ok": True}
-    assert client.get("/").json()["endpoints"]["health"] == "/healthz"
+
+def test_mcp_requires_the_key(monkeypatch, caplog, http):
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    hdrs = {"accept": "application/json, text/event-stream"}
+
+    with caplog.at_level(logging.INFO, logger="solvent.audit"):
+        r = http.post("/mcp", json=body, headers=hdrs)
+    assert r.status_code == 401
+    assert r.json() == {"denied": True, "reason": "unauthenticated"}
+    ev = json.loads(caplog.records[-1].message)
+    assert (ev["tool"], ev["decision"], ev["reason"]) == ("mcp", "denied", "unauthenticated")
+
+    ok = http.post("/mcp", json=body, headers={**hdrs, "authorization": "Bearer k3y"})
+    assert ok.status_code == 200
+
+
+def test_wrong_key_denied(monkeypatch, http):
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    r = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={"accept": "application/json, text/event-stream", "authorization": "Bearer nope"},
+    )
+    assert r.status_code == 401
+
+
+def test_probes_stay_open(monkeypatch, http):
+    """The pipeline smoke test and the liveness probe must not need a key."""
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    assert http.get("/healthz").status_code == 200
+    assert http.get("/").status_code == 200
+
+
+def test_guard_is_inert_without_a_key(monkeypatch, http):
+    """Local development runs unauthenticated, as it does today."""
+    monkeypatch.setattr(server, "API_KEY", "")
+    r = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={"accept": "application/json, text/event-stream"},
+    )
+    assert r.status_code == 200
