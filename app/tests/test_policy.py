@@ -331,3 +331,16 @@ def test_governed_rejects_a_replayed_token(monkeypatch):
         "denied": True,
         "reason": "approval_replayed",
     }
+
+
+def test_non_ascii_token_denied_not_crashed():
+    """compare_digest refuses non-ASCII str; the caller picks the token, so compare bytes."""
+    args = {"name": "x", "approval_token": "\x80.1700000000.who"}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required", "")
+
+
+def test_non_ascii_approver_round_trips():
+    who = "opsé@example.com"
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, who)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("allowed", "approved", who)

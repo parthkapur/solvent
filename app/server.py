@@ -79,8 +79,10 @@ def require_key(asgi):
 
     async def guard(scope, receive, send):
         if scope["type"] == "http" and API_KEY and scope["path"].startswith("/mcp"):
-            offered = dict(scope["headers"]).get(b"authorization", b"").decode()
-            if not hmac.compare_digest(offered, f"Bearer {API_KEY}"):
+            # Stay in bytes: compare_digest refuses non-ASCII str, and .decode() would
+            # raise on a header that is not valid UTF-8. The caller picks both.
+            offered = dict(scope["headers"]).get(b"authorization", b"")
+            if not hmac.compare_digest(offered, b"Bearer " + API_KEY.encode()):
                 audit_event(tool="mcp", decision="denied", reason="unauthenticated")
                 await JSONResponse({"denied": True, "reason": "unauthenticated"}, status_code=401)(
                     scope, receive, send

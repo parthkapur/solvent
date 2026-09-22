@@ -108,7 +108,8 @@ def decide(
     if not ts.isdigit() or not approver:
         return "denied", "approval_required", ""
     expected = mint_token(tool, _without_token(args), secret, approver, now=int(ts))
-    if not hmac.compare_digest(sig, expected.partition(".")[0]):
+    # compare_digest refuses non-ASCII str, and an attacker picks the token; compare bytes.
+    if not hmac.compare_digest(sig.encode(), expected.partition(".")[0].encode()):
         return "denied", "approval_required", ""
     # Past this line the identity is signed, so it is safe to name it in a denial.
     if policy.approvers and approver not in policy.approvers:

@@ -104,3 +104,17 @@ def test_guard_is_inert_without_a_key(monkeypatch, http):
         headers={"accept": "application/json, text/event-stream"},
     )
     assert r.status_code == 200
+
+
+def test_non_ascii_auth_header_denied_not_crashed(monkeypatch, http):
+    """A header that is not valid UTF-8 must be a 401, not a 500."""
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    r = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={
+            "accept": "application/json, text/event-stream",
+            "authorization": b"Bearer \x80\xff",
+        },
+    )
+    assert r.status_code == 401
