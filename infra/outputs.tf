@@ -5,3 +5,7 @@ output "app_url" {
 output "acr_name" {
   value = azurerm_container_registry.main.name
 }
+
+output "audit_storage_account" {
+  value = azurerm_storage_account.audit.name
+}

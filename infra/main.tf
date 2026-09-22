@@ -32,6 +32,40 @@ resource "azurerm_application_insights" "main" {
   tags                = local.tags
 }
 
+# Audit lines an operator cannot edit. Unlocked immutability is reversible, which is what a
+# demo wants; a regulated deployment would set state = "Locked" and accept that it is forever.
+resource "azurerm_storage_account" "audit" {
+  name                            = "${var.project}audit${local.suffix}"
+  resource_group_name             = azurerm_resource_group.main.name
+  location                        = azurerm_resource_group.main.location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  min_tls_version                 = "TLS1_2"
+  https_traffic_only_enabled      = true
+  allow_nested_items_to_be_public = false
+
+  blob_properties {
+    versioning_enabled = true
+  }
+
+  immutability_policy {
+    state                         = "Unlocked"
+    period_since_creation_in_days = 7
+    allow_protected_append_writes = true
+  }
+
+  tags = local.tags
+}
+
+resource "azurerm_log_analytics_data_export_rule" "audit" {
+  name                    = "${var.project}-audit-export"
+  resource_group_name     = azurerm_resource_group.main.name
+  workspace_resource_id   = azurerm_log_analytics_workspace.main.id
+  destination_resource_id = azurerm_storage_account.audit.id
+  table_names             = ["AppTraces"]
+  enabled                 = true
+}
+
 resource "azurerm_monitor_action_group" "main" {
   name                = "${var.project}-ops"
   resource_group_name = azurerm_resource_group.main.name
