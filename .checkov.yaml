@@ -1,0 +1,19 @@
+# Terraform scanning for the Validate stage. Anything not listed here fails the build.
+#
+# Every skip below is the same decision: the registry is Basic SKU on a trial subscription,
+# and each of these checks requires Premium (or a paid Defender add-on). They are recorded
+# rather than silenced so the trade-off is reviewable — a production registry would be
+# Premium and none of these would be skipped.
+directory:
+  - infra
+compact: true
+quiet: true
+skip-check:
+  - CKV_AZURE_139 # disable public networking — needs Premium + private endpoints
+  - CKV_AZURE_163 # image vulnerability scanning — needs Defender for Containers
+  - CKV_AZURE_164 # signed/trusted images — content trust needs Premium
+  - CKV_AZURE_165 # geo-replication — needs Premium, and this is a single-region demo
+  - CKV_AZURE_166 # image quarantine — needs Premium
+  - CKV_AZURE_167 # untagged-manifest retention policy — needs Premium
+  - CKV_AZURE_233 # zone redundancy — needs Premium
+  - CKV_AZURE_237 # dedicated data endpoints — needs Premium

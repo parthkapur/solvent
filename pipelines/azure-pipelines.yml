@@ -56,6 +56,12 @@ stages:
                   -var api_key=$(API_KEY) \
                   -var approvers=$(APPROVERS) \
                   -var alert_email=$(ALERT_EMAIL)
+          - script: |
+              set -euo pipefail
+              pip install -q checkov
+              # Accepted findings live in .checkov.yaml, each with its reason.
+              checkov --config-file .checkov.yaml
+            displayName: checkov
           - publish: $(Build.ArtifactStagingDirectory)/tfplan
             artifact: tfplan
 
