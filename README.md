@@ -2,9 +2,10 @@
 
 An MCP server with three tools against Azure and a controls layer in front of them:
 
-- **read** tools (`get_cost_summary`, `get_resource_health`) run freely.
-- **write** tools (`restart_container_app`) are refused unless the call carries an approval token
-  a human minted for that exact action within the last 10 minutes.
+- `/mcp` needs a bearer key at all; `/` and `/healthz` stay open for probes.
+- **read** tools (`get_cost_summary`, `get_resource_health`) then run freely.
+- **write** tools (`restart_container_app`) are refused unless the call carries a single-use
+  approval token a named human minted for that exact action, still inside its window.
 - every call, allowed or denied, is logged with reason, latency and trace id, and counted in a
   metric. Bursts of denials raise an alert.
 
@@ -57,25 +58,38 @@ tools:
   get_cost_summary: read
   get_resource_health: read
   restart_container_app: write
+ttl_s:
+  restart_container_app: 120   # bigger blast radius, shorter approval window
+approvers: []                  # empty = anyone holding the secret; Terraform sets APPROVERS
 ```
 
 `@governed` wraps every tool. Per call:
 
 1. Unknown tool → `{"denied": true, "reason": "not_in_policy"}`.
 2. `read` → runs.
-3. `write` → requires `approval_token = "<sig>.<ts>"`,
-   `sig = HMAC_SHA256(APPROVAL_SECRET, "tool:canonical_json(args):ts")`.
-   Missing or wrong → `approval_required`; older than 10 minutes → `approval_expired`.
-   The token is bound to tool, arguments and mint time.
+3. `write` → requires `approval_token = "<sig>.<ts>.<approver>"`,
+   `sig = HMAC_SHA256(APPROVAL_SECRET, "tool:canonical_json(args):approver:ts")`.
+   The approver is inside the signed message, so the identity cannot be relabelled; it goes
+   last so an identity containing dots survives the split. Checked in order: signature
+   (`approval_required`), allow-list (`approver_not_authorized`), age (`approval_expired` —
+   600s by default, 120s for `restart_container_app`), reuse (`approval_replayed`).
+   The allow-list is checked *after* the signature so an unsigned claim never reveals who
+   is on it.
 4. Denials and tool errors are returned as structured content, not raised.
 5. One audit line (JSON, logger `solvent.audit`):
-   `ts, tool, args_hash, decision, reason, latency_ms, trace_id, span_id`.
+   `ts, tool, args_hash, decision, reason, latency_ms, trace_id, span_id`, plus
+   `approved_by` once a signature has verified.
    Metrics: `mcp.tool.calls{tool,decision}`, `mcp.tool.latency_ms{tool}`.
+
+In front of all of that, `/mcp` requires `Authorization: Bearer $API_KEY`. A rejected request
+is a 401 and an audit line with `reason: "unauthenticated"`, so probing shows up beside every
+other denial.
 
 Mint a token:
 
 ```bash
 APPROVAL_SECRET=... uv run python -m app.approve restart_container_app name=solvent-app
+# the approver defaults to `az account show --query user.name`; override with --approver
 ```
 
 ## Run locally
@@ -86,6 +100,9 @@ az login
 export AZURE_SUBSCRIPTION_ID=<sub> AZURE_RESOURCE_GROUP=solvent-rg APPROVAL_SECRET=devsecret
 uv run uvicorn app.server:app --port 8000
 ```
+
+Leaving `API_KEY` unset keeps the local server open, which is what development wants. Set it
+and every `/mcp` call needs `-H "authorization: Bearer $API_KEY"`.
 
 ```bash
 curl -s localhost:8000/healthz
@@ -103,12 +120,15 @@ Tests: `uv run pytest`. Policy tests hit `decide`/`governed` directly; contract 
 Add the deployed server to an MCP client. Claude Code:
 
 ```bash
-claude mcp add --transport http solvent https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io/mcp
+claude mcp add --transport http solvent \
+  --header "Authorization: Bearer $API_KEY" \
+  https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io/mcp
 claude
 ```
 
 Claude Desktop: Settings > Connectors > Add custom connector, URL
-`https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io/mcp`.
+`https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io/mcp`. Its connector UI
+may not accept custom headers — if it does not, run the walkthrough from Claude Code or curl.
 
 Then, in the chat:
 
@@ -128,9 +148,16 @@ Then, in the chat:
    `approval_token` set and gets `{"restarted": "solvent-app", "revision": "..."}`.
 5. **Same token, different target.** "Use that token to restart an app called other-app."
    Denied, `approval_required`: the signature covers the arguments.
-6. **Same token, 10 minutes later.** Denied, `approval_expired`.
-7. **Unknown tool.** Any MCP call to a tool name not in `policy.yaml` gets
+6. **Same token, two minutes later.** Denied, `approval_expired` — `restart_container_app`
+   has a 120s window, not the 600s default.
+7. **Same token, twice.** Approve a restart, then ask for the same restart again with the same
+   token. Denied, `approval_replayed`.
+8. **An identity that is not on the list.** Mint with `--approver someone@else.com`. Denied,
+   `approver_not_authorized` — and the audit line names the identity that tried.
+9. **Unknown tool.** Any MCP call to a tool name not in `policy.yaml` gets
    `{"denied": true, "reason": "not_in_policy"}`.
+10. **No key at all.** `curl` `/mcp` without the header: 401, and an audit line with
+    `reason: "unauthenticated"`.
 
 Every step above is now a row in App Insights (`solvent-appi` > Logs):
 
@@ -146,6 +173,7 @@ Same thing with curl, no AI client:
 ```bash
 URL=https://solvent-app.happyocean-04abcb36.eastus.azurecontainerapps.io
 curl -s -X POST $URL/mcp -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+  -H "authorization: Bearer $API_KEY" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"restart_container_app","arguments":{"name":"solvent-app","approval_token":"<token>"}}}'
 ```
 
@@ -221,8 +249,15 @@ email via action group.
 
 ## Not implemented
 
-- Single-use nonces; a token can be replayed within its 10-minute window.
-- RBAC on who may mint approvals, with minting audited.
-- Second environment via Terraform modules, `dev` stage without approval.
+- Per-caller identity on `/mcp`. The bearer key is one shared secret, so the audit log names
+  who *approved* a write but not who *called* it. An Entra-issued JWT verified against the
+  tenant JWKS is the upgrade path.
+- The nonce ledger is in-process. Correct at `max_replicas = 1`, but it empties on a cold
+  start, so a token remains replayable across a restart inside its window. An Azure Table
+  keyed by signature fixes it.
+- Approver identities are asserted by whoever holds `APPROVAL_SECRET`, not proven. The
+  allow-list restricts *which* identity may be claimed, not that the claimant is that person.
+- Gating by data classification, as opposed to blast radius via per-tool approval windows.
 - SLO burn-rate alerts on `mcp.tool.latency_ms`; dashboard as code.
-- Gating by blast radius or data classification rather than read/write.
+- Second environment via Terraform modules, `dev` stage without approval.
+- An immutable copy of the audit trail; the Log Analytics workspace is the only store.
