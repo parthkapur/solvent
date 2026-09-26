@@ -52,10 +52,17 @@ stages:
                 cd envs/prod
                 terraform init -input=false -backend-config=backend.hcl
                 terraform validate
+                # A variable missing from the group arrives as the literal $(API_KEY); unquoted,
+                # bash command-substitutes it to nothing and Terraform plans an empty secret that
+                # only fails at apply. Single quotes keep it inert so the check can see it.
+                # ponytail: asserts the 64-hex shape of `openssl rand -hex 32`; widen if the key
+                # format changes.
+                KEY='$(API_KEY)'
+                [ ${#KEY} -eq 64 ] || { echo "##vso[task.logissue type=error]API_KEY missing or malformed in variable group 'solvent' (expected 64 hex chars)"; exit 1; }
                 terraform plan -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan \
                   -var image_tag=$(Build.SourceVersion) \
                   -var approval_secret=$(APPROVAL_SECRET) \
-                  -var api_key=$(API_KEY) \
+                  -var api_key="$KEY" \
                   -var approvers=$(APPROVERS) \
                   -var alert_email=$(ALERT_EMAIL)
           - script: |
