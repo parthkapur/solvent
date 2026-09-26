@@ -24,8 +24,8 @@ service, `/healthz`, `/mcp`).
 | pytest | `app/tests/` | Policy rules and tool wiring, with the Azure SDK mocked. |
 | Terraform (azurerm 4) | `infra/modules/solvent`, `infra/envs/` | One module, two environment roots. `prod` is applied from a saved plan; `dev` is planned in CI and never applied. |
 | Azure DevOps Pipelines | `pipelines/` | Lint/test → plan → build → approval → apply → smoke. Workload identity federation, no stored credentials. |
-| OpenTelemetry + Azure Monitor | `app/policy.py`, `app/server.py`, `infra/main.tf` | Audit log, metrics and traces in Application Insights; workbook, denial-burst and latency-SLO alerts, and an immutable export, all as Terraform. |
-| Container Apps + ACR | `infra/main.tf`, `Dockerfile` | Runs the image with a managed identity; scales to zero. |
+| OpenTelemetry + Azure Monitor | `app/policy.py`, `app/server.py`, `infra/modules/solvent/main.tf` | Audit log, metrics and traces in Application Insights; workbook, denial-burst and latency-SLO alerts, and an immutable export, all as Terraform. |
+| Container Apps + ACR | `infra/modules/solvent/main.tf`, `Dockerfile` | Runs the image with a managed identity; scales to zero. |
 
 ## Architecture
 
@@ -254,7 +254,7 @@ AppMetrics
 | summarize sum(Sum) by tool=tostring(Properties.tool), decision=tostring(Properties.decision)
 ```
 
-Those three queries are the **workbook**, deployed from `infra/main.tf`
+Those three queries are the **workbook**, deployed from `infra/modules/solvent/main.tf`
 (`azurerm_application_insights_workbook`). Open App Insights > Workbooks > "Solvent - controls"
 rather than pasting KQL.
 
