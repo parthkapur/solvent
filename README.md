@@ -22,7 +22,7 @@ service, `/healthz`, `/mcp`).
 |---|---|---|
 | Python + MCP SDK | `app/server.py`, `app/policy.py`, `app/entra.py`, `app/nonces.py` | The server and the gate. |
 | pytest | `app/tests/` | Policy rules and tool wiring, with the Azure SDK mocked. |
-| Terraform (azurerm 4) | `infra/modules/solvent`, `infra/envs/` | One module, two environment roots, both applied from a saved plan; `dev` shares `prod`'s registry rather than standing up a second one. |
+| Terraform (azurerm 4) | `infra/modules/solvent`, `infra/envs/` | One module, two environment roots, both applied from a saved plan; `dev` shares `prod`'s registry and Container App Environment rather than standing up second ones. |
 | Azure DevOps Pipelines | `pipelines/` | Lint/test → plan → build → approval → apply → smoke. Workload identity federation, no stored credentials. |
 | OpenTelemetry + Azure Monitor | `app/policy.py`, `app/server.py`, `infra/modules/solvent/main.tf` | Audit log, metrics and traces in Application Insights; workbook, denial-burst and latency-SLO alerts, and an immutable export, all as Terraform. |
 | Container Apps + ACR | `infra/modules/solvent/main.tf`, `Dockerfile` | Runs the image with a managed identity; scales to zero. |
@@ -46,7 +46,7 @@ service, `/healthz`, `/mcp`).
 
   infra/modules/    Terraform module: RG, Log Analytics, App Insights, ACR, Container Apps env +
                     app, managed identity + RBAC, action group, alerts, workbook, audit export
-  infra/envs/       prod and dev, both applied from a saved plan; dev shares prod's ACR
+  infra/envs/       prod and dev, both applied from a saved plan; dev shares prod's ACR and env
   pipelines/        Azure DevOps: Validate ──► Build ──► Deploy (environment approval gate)
 ```
 
@@ -363,6 +363,12 @@ not live only somewhere an operator can edit it.
 - `dev` shares the prod registry *and* the prod repository — it pulls the exact image prod runs,
   since the pipeline only ever pushes one. So an image that cannot be pulled fails in both
   environments at once. Giving dev its own build is a second ACR repository and a second push.
+- `dev` also shares prod's Container App Environment, because a trial subscription allows exactly
+  one per region and refuses the second with `MaxNumberOfRegionalEnvironmentsInSubExceeded`. Dev
+  still has its own resource group, app, secrets, identity, workspace and App Insights; what it
+  gives up is network and console-log isolation, since the environment owns both. The module takes
+  `container_app_environment_id` for this, the same shape as `registry_id`, so a paid subscription
+  restores the separation by leaving it empty.
 - The JWKS cache is per process, refetched every 5 minutes (PyJWKClient's default) or on any
   unknown `kid`, not once per cold start. At `max_replicas = 1` that is one process's worth of
   refetching; scaled out it is one per replica.

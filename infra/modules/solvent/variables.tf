@@ -61,3 +61,9 @@ variable "image_repository" {
   default     = ""
   description = "Repository inside the registry to pull from. Empty uses the project name, which is what prod does."
 }
+
+variable "container_app_environment_id" {
+  type        = string
+  default     = ""
+  description = "Existing Container App Environment to run in. Empty creates one, which is what prod does."
+}

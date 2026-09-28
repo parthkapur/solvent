@@ -47,3 +47,9 @@ variable "registry_login_server" {
   default     = ""
   description = "Login server of registry_id. Required when registry_id is set."
 }
+
+variable "container_app_environment_id" {
+  type        = string
+  default     = ""
+  description = "Prod's environment, shared rather than duplicated. Empty would create a second one."
+}

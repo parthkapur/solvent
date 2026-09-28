@@ -30,6 +30,12 @@ module "solvent" {
   entra_audience        = var.entra_audience
   registry_id           = var.registry_id
   registry_login_server = var.registry_login_server
+  # ... and prod's environment too. A trial subscription allows exactly one Container App
+  # Environment per region, so a second one in eastus is refused outright with
+  # MaxNumberOfRegionalEnvironmentsInSubExceeded. Sharing costs nothing and dev keeps its own
+  # app, secrets, workspace and App Insights - only the container console logs land in prod's
+  # workspace. ponytail: a paid subscription could give dev its own; nothing else would change.
+  container_app_environment_id = var.container_app_environment_id
   # dev pulls the identical image prod runs, out of prod's registry - the pipeline only ever
   # pushes one repository, "solvent", so dev must ask for that rather than "solventdev".
   image_repository = "solvent"

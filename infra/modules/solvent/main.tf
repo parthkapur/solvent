@@ -214,7 +214,16 @@ resource "azurerm_role_assignment" "cost_reader" {
 
 # --- runtime -----------------------------------------------------------------
 
+# Same self-indexing trick, same reason as the registry above: envs/prod/moved.tf names this
+# resource, which suppresses Terraform's implicit `main` -> `main[0]` migration for the `count`
+# and would otherwise destroy and recreate prod's environment - taking the running app with it.
+moved {
+  from = azurerm_container_app_environment.main
+  to   = azurerm_container_app_environment.main[0]
+}
+
 resource "azurerm_container_app_environment" "main" {
+  count                      = var.container_app_environment_id == "" ? 1 : 0
   name                       = "${var.project}-env"
   location                   = azurerm_resource_group.main.location
   resource_group_name        = azurerm_resource_group.main.name
@@ -231,9 +240,13 @@ resource "azurerm_container_app_environment" "main" {
   }
 }
 
+locals {
+  container_app_environment_id = var.container_app_environment_id != "" ? var.container_app_environment_id : azurerm_container_app_environment.main[0].id
+}
+
 resource "azurerm_container_app" "main" {
   name                         = "${var.project}-app"
-  container_app_environment_id = azurerm_container_app_environment.main.id
+  container_app_environment_id = local.container_app_environment_id
   resource_group_name          = azurerm_resource_group.main.name
   revision_mode                = "Single"
   workload_profile_name        = "Consumption"

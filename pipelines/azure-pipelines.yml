@@ -113,6 +113,10 @@ stages:
                 [ ${#KEY} -eq 64 ] || { echo "##vso[task.logissue type=error]DEV_API_KEY missing or malformed in variable group 'solvent' (expected 64 hex chars)"; exit 1; }
                 ACR_ID=$(az acr show -n $(az acr list -g solvent-rg --query '[0].name' -o tsv) -g solvent-rg --query id -o tsv)
                 ACR_SERVER=$(az acr show -n $(az acr list -g solvent-rg --query '[0].name' -o tsv) -g solvent-rg --query loginServer -o tsv)
+                # A trial subscription allows one Container App Environment per region, so dev
+                # runs inside prod's rather than being refused at apply time with
+                # MaxNumberOfRegionalEnvironmentsInSubExceeded.
+                CAE_ID=$(az containerapp env show -n solvent-env -g solvent-rg --query id -o tsv)
                 terraform plan -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan-dev \
                   -var image_tag=$(Build.SourceVersion) \
                   -var approval_secret=$(DEV_APPROVAL_SECRET) \
@@ -121,7 +125,8 @@ stages:
                   -var entra_tenant_id=$(ENTRA_TENANT_ID) \
                   -var entra_audience=$(ENTRA_AUDIENCE) \
                   -var registry_id="$ACR_ID" \
-                  -var registry_login_server="$ACR_SERVER"
+                  -var registry_login_server="$ACR_SERVER" \
+                  -var container_app_environment_id="$CAE_ID"
                 # Same guard as the infra job's plan, applied to dev's own plan file.
                 terraform show -json $(Build.ArtifactStagingDirectory)/tfplan-dev \
                   | jq -e '[.resource_changes[] | select(.change.actions | index("delete"))] | length == 0' >/dev/null \
