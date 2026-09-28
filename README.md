@@ -132,10 +132,12 @@ record rather than looking like the strong one. A rejected request is a 401 and 
 Mint a token:
 
 ```bash
-APPROVAL_SECRET=... ENTRA_AUDIENCE=api://solvent \
+APPROVAL_SECRET=... ENTRA_AUDIENCE=<the aud your tenant issues> \
   uv run python -m app.approve restart_container_app name=solvent-app
 # the approver defaults to `az account show --query user.name`; override with --approver
 # ENTRA_AUDIENCE set means the token carries an az-issued proof of the approver's identity
+# it is the token's `aud` claim, which for accessTokenAcceptedVersion 2 is the client id, not
+# the api:// URI - see `## Deploy` item 5
 ```
 
 ## Run locally
@@ -193,7 +195,7 @@ Then, in the chat:
    and asks for a token.
 4. **Mint a token** in a terminal, with the same `APPROVAL_SECRET` the deployment uses:
    ```bash
-   APPROVAL_SECRET=... ENTRA_AUDIENCE=api://solvent \
+   APPROVAL_SECRET=... ENTRA_AUDIENCE=<the aud your tenant issues, see ## Deploy item 5> \
      uv run python -m app.approve restart_container_app name=solvent-app
    ```
    The token now carries an `az`-issued proof of the approver's identity, checked before the
@@ -262,12 +264,16 @@ Azure DevOps, once:
    `ENTRA_TENANT_ID`, `ENTRA_AUDIENCE`.
 3. Environment `prod` with an Approvals check.
 4. Pipeline from `pipelines/azure-pipelines.yml`, trigger on `main`, `*.md` excluded.
-5. The app registration that exposes the API at `ENTRA_AUDIENCE` (`api://solvent`). Every identity
-   in `APPROVERS` must be able to request a token for it, or minting will fail at `az account
-   get-access-token` before the approval is ever signed. `accessTokenAcceptedVersion` can be left
-   unset (v1 tokens) or set to `2` — `app/entra.py` accepts the issuer either form produces. A
-   verified caller is authenticated, not authorized (see `## Not implemented`); set "Assignment
-   required?" on the enterprise application to scope who can obtain a token for it at all.
+5. The app registration exposing the API, with a scope and the Azure CLI (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`)
+   pre-authorized against it — without that, minting fails at `az account get-access-token` before
+   the approval is ever signed. **`ENTRA_AUDIENCE` is the value that lands in the token's `aud`
+   claim, which is not always the Application ID URI:** with `accessTokenAcceptedVersion: 2` Entra
+   issues `aud` = the application (client) id, and only v1 tokens carry the URI. Read a real token
+   rather than assuming — `az account get-access-token --resource <uri> --query accessToken -o tsv`,
+   then decode the payload and use whatever `aud` says. Either token version works; `app/entra.py`
+   accepts both issuer forms. A verified caller is authenticated, not authorized (see
+   `## Not implemented`); set "Assignment required?" on the enterprise application to scope who can
+   obtain a token at all.
 
 After that, every push to `main` deploys through the pipeline.
 
