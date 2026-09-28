@@ -31,3 +31,33 @@ variable "approvers" {
   default     = ""
   description = "Comma-separated identities allowed to mint approval tokens. Empty means anyone holding approval_secret."
 }
+
+variable "registry_id" {
+  type        = string
+  default     = ""
+  description = "Existing ACR to attach to. Empty creates one, which is what prod does."
+}
+
+variable "registry_login_server" {
+  type        = string
+  default     = ""
+  description = "Login server of registry_id. Required when registry_id is set."
+}
+
+variable "entra_tenant_id" {
+  type        = string
+  default     = ""
+  description = "Tenant whose JWKS verifies caller and approver tokens. Empty disables the JWT path."
+}
+
+variable "entra_audience" {
+  type        = string
+  default     = ""
+  description = "Application ID URI tokens must be addressed to."
+}
+
+variable "image_repository" {
+  type        = string
+  default     = ""
+  description = "Repository inside the registry to pull from. Empty uses the project name, which is what prod does."
+}

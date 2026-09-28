@@ -22,4 +22,6 @@ module "solvent" {
   api_key         = var.api_key
   approvers       = var.approvers
   alert_email     = var.alert_email
+  entra_tenant_id = var.entra_tenant_id
+  entra_audience  = var.entra_audience
 }

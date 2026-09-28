@@ -3,7 +3,7 @@
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from app import policy
+from app import nonces, policy
 
 SECRET = "s3cret"
 POL = policy.Policy({"write_tool": "write"})
@@ -77,11 +77,11 @@ def test_a_forged_signature_never_verifies(args, who, ts, other):
 @given(args=arg_dicts, who=identities, ts=timestamps)
 @settings(max_examples=50)
 def test_no_token_verifies_twice(args, who, ts):
-    consumed: dict[str, int] = {}
+    consume = nonces.local_consumer()
     tok = policy.mint_token("write_tool", args, SECRET, who, now=ts)
     call = {**args, "approval_token": tok}
-    assert policy.decide("write_tool", call, POL, SECRET, now=ts, consumed=consumed)[0] == "allowed"
-    assert policy.decide("write_tool", call, POL, SECRET, now=ts, consumed=consumed) == (
+    assert policy.decide("write_tool", call, POL, SECRET, now=ts, consume=consume)[0] == "allowed"
+    assert policy.decide("write_tool", call, POL, SECRET, now=ts, consume=consume) == (
         "denied",
         "approval_replayed",
         who,

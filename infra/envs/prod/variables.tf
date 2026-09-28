@@ -23,3 +23,15 @@ variable "approvers" {
 variable "alert_email" {
   type = string
 }
+
+variable "entra_tenant_id" {
+  type        = string
+  default     = ""
+  description = "Tenant whose JWKS verifies caller and approver tokens. Empty disables the JWT path."
+}
+
+variable "entra_audience" {
+  type        = string
+  default     = ""
+  description = "Application ID URI tokens must be addressed to."
+}

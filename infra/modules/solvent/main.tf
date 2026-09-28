@@ -2,7 +2,7 @@ data "azurerm_subscription" "current" {}
 
 locals {
   suffix = substr(sha1(data.azurerm_subscription.current.subscription_id), 0, 6)
-  image  = "${azurerm_container_registry.main.login_server}/${var.project}:${var.image_tag}"
+  image  = "${local.registry_server}/${var.image_repository != "" ? var.image_repository : var.project}:${var.image_tag}"
   tags   = { project = var.project, managed_by = "terraform" }
 }
 
@@ -32,8 +32,9 @@ resource "azurerm_application_insights" "main" {
   tags                = local.tags
 }
 
-# Audit lines an operator cannot edit. Unlocked immutability is reversible, which is what a
-# demo wants; a regulated deployment would set state = "Locked" and accept that it is forever.
+# Audit lines an operator cannot edit. The window matches the Log Analytics retention, so the
+# export is protected for as long as it exists. Unlocked immutability is reversible, which is what
+# a demo wants; a regulated deployment would set state = "Locked" and accept that it is forever.
 resource "azurerm_storage_account" "audit" {
   name                            = "${var.project}audit${local.suffix}"
   resource_group_name             = azurerm_resource_group.main.name
@@ -62,7 +63,7 @@ resource "azurerm_storage_account" "audit" {
 
   immutability_policy {
     state                         = "Unlocked"
-    period_since_creation_in_days = 7
+    period_since_creation_in_days = 30
     allow_protected_append_writes = true
   }
 
@@ -76,6 +77,19 @@ resource "azurerm_log_analytics_data_export_rule" "audit" {
   destination_resource_id = azurerm_storage_account.audit.id
   table_names             = ["AppTraces"]
   enabled                 = true
+}
+
+# Single-use approval bookkeeping. Same account as the audit export: one storage account to reason
+# about, and the immutability policy applies to blobs, not tables.
+resource "azurerm_storage_table" "nonces" {
+  name                 = "nonces"
+  storage_account_name = azurerm_storage_account.audit.name
+}
+
+resource "azurerm_role_assignment" "nonce_writer" {
+  scope                = azurerm_storage_account.audit.id
+  role_definition_name = "Storage Table Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.app.principal_id
 }
 
 resource "azurerm_monitor_action_group" "main" {
@@ -155,7 +169,18 @@ resource "azurerm_user_assigned_identity" "app" {
   tags                = local.tags
 }
 
+# Self-index so both roots inherit it. envs/prod/moved.tf already re-addresses this resource
+# (pre-module -> module.solvent...), and the presence of *any* moved block naming it suppresses
+# Terraform's implicit `main` -> `main[0]` migration for the `count` below - without this block,
+# prod's next apply would destroy and recreate the registry along with every pushed image.
+# Do not delete this thinking it is dead weight; it is what keeps the migration a no-op.
+moved {
+  from = azurerm_container_registry.main
+  to   = azurerm_container_registry.main[0]
+}
+
 resource "azurerm_container_registry" "main" {
+  count               = var.registry_id == "" ? 1 : 0
   name                = "${var.project}acr${local.suffix}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
@@ -164,8 +189,13 @@ resource "azurerm_container_registry" "main" {
   tags                = local.tags
 }
 
+locals {
+  registry_id     = var.registry_id != "" ? var.registry_id : azurerm_container_registry.main[0].id
+  registry_server = var.registry_id != "" ? var.registry_login_server : azurerm_container_registry.main[0].login_server
+}
+
 resource "azurerm_role_assignment" "acr_pull" {
-  scope                = azurerm_container_registry.main.id
+  scope                = local.registry_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.app.principal_id
 }
@@ -215,7 +245,7 @@ resource "azurerm_container_app" "main" {
   }
 
   registry {
-    server   = azurerm_container_registry.main.login_server
+    server   = local.registry_server
     identity = azurerm_user_assigned_identity.app.id
   }
 
@@ -268,6 +298,22 @@ resource "azurerm_container_app" "main" {
         name  = "AZURE_RESOURCE_GROUP"
         value = azurerm_resource_group.main.name
       }
+      env {
+        name  = "NONCE_TABLE_ENDPOINT"
+        value = "https://${azurerm_storage_account.audit.name}.table.core.windows.net"
+      }
+      env {
+        name  = "NONCE_TABLE_NAME"
+        value = azurerm_storage_table.nonces.name
+      }
+      env {
+        name  = "ENTRA_TENANT_ID"
+        value = var.entra_tenant_id
+      }
+      env {
+        name  = "ENTRA_AUDIENCE"
+        value = var.entra_audience
+      }
       liveness_probe {
         transport = "HTTP"
         path      = "/healthz"
@@ -285,7 +331,17 @@ resource "azurerm_container_app" "main" {
     }
   }
 
-  depends_on = [azurerm_role_assignment.acr_pull]
+  # azurerm_storage_table.nonces is already an implicit dependency (its .name feeds
+  # NONCE_TABLE_NAME below); nonce_writer is not referenced anywhere in this resource, so it
+  # needs to be named explicitly or the app can start before the RBAC role it needs to write
+  # replay records exists. This narrows the window but does not close it - role assignment
+  # propagation can still lag the app's first requests by up to a couple of minutes, and the
+  # first approvals after a deploy may deny ledger_unavailable until it catches up.
+  depends_on = [
+    azurerm_role_assignment.acr_pull,
+    azurerm_role_assignment.nonce_writer,
+    azurerm_storage_table.nonces,
+  ]
 }
 
 # The app may restart itself (the one write tool). Scoped to the app only.

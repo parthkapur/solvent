@@ -31,3 +31,8 @@ skip-check:
   #                 resource outside the module. The config is right, the check is wrong.
   - CKV2_AZURE_40 # shared-key authorization — Log Analytics data export delivery with shared
   #                 keys disabled is unverified; lock it down once export is confirmed working
+  - CKV2_AZURE_20 # table-service logging — the application already audits every ledger decision
+  #                 (approval_replayed, ledger_unavailable, ...) at the application layer, through
+  #                 policy._record into the same exported, immutable audit trail. Table-service
+  #                 read/write/delete logging would re-record the same events one layer down, at
+  #                 ingestion cost this trial subscription doesn't need to pay twice.

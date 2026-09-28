@@ -23,3 +23,27 @@ variable "approvers" {
 variable "alert_email" {
   type = string
 }
+
+variable "entra_tenant_id" {
+  type        = string
+  default     = ""
+  description = "Tenant whose JWKS verifies caller and approver tokens. Empty disables the JWT path."
+}
+
+variable "entra_audience" {
+  type        = string
+  default     = ""
+  description = "Application ID URI tokens must be addressed to."
+}
+
+variable "registry_id" {
+  type        = string
+  default     = ""
+  description = "Prod's ACR, attached to rather than duplicated. Empty would create a second registry."
+}
+
+variable "registry_login_server" {
+  type        = string
+  default     = ""
+  description = "Login server of registry_id. Required when registry_id is set."
+}

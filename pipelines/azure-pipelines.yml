@@ -8,7 +8,8 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
-  - group: solvent # AZURE_SERVICE_CONNECTION, APPROVAL_SECRET + API_KEY (secret), APPROVERS, ALERT_EMAIL
+  - group: solvent # AZURE_SERVICE_CONNECTION, APPROVAL_SECRET + API_KEY (secret), APPROVERS, ALERT_EMAIL,
+  #                  ENTRA_TENANT_ID, ENTRA_AUDIENCE, DEV_APPROVAL_SECRET + DEV_API_KEY (secret)
   - name: TF_IN_AUTOMATION
     value: "true"
 
@@ -64,7 +65,19 @@ stages:
                   -var approval_secret=$(APPROVAL_SECRET) \
                   -var api_key="$KEY" \
                   -var approvers=$(APPROVERS) \
-                  -var alert_email=$(ALERT_EMAIL)
+                  -var alert_email=$(ALERT_EMAIL) \
+                  -var entra_tenant_id=$(ENTRA_TENANT_ID) \
+                  -var entra_audience=$(ENTRA_AUDIENCE)
+                # Nothing here fails the build on a destroy. Expected plans are creates-plus-
+                # in-place-changes; a delete showing up is either a verified-safe replacement
+                # (the ACR, via the module's moved block) or something nobody has checked
+                # offline (e.g. whether widening the audit storage account's immutability
+                # policy forces replacement, which would destroy exported audit blobs) - either
+                # way it needs a human, not an auto-apply. A legitimate destroy means editing
+                # this guard deliberately, not deleting it because it fired once.
+                terraform show -json $(Build.ArtifactStagingDirectory)/tfplan \
+                  | jq -e '[.resource_changes[] | select(.change.actions | index("delete"))] | length == 0' >/dev/null \
+                  || { echo "##vso[task.logissue type=error]plan contains destroys — review by hand"; exit 1; }
           - script: |
               set -euo pipefail
               pip install -q checkov
@@ -75,7 +88,7 @@ stages:
             artifact: tfplan
 
       - job: infra_dev
-        displayName: terraform plan (dev, never applied)
+        displayName: terraform plan (dev, applied in Deploy)
         steps:
           - template: install-tools.yml
           - task: AzureCLI@2
@@ -91,8 +104,30 @@ stages:
                 export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
                        ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
                 terraform init -input=false -backend-config=backend.hcl
-                # Proves the module composes for a second environment. Never applied.
-                terraform plan -input=false
+                # Same single-quote-then-length-check as the infra job's API_KEY guard above:
+                # a missing variable arrives as the literal $(DEV_API_KEY), and quoting keeps it
+                # inert so the check can see it instead of an unquoted empty string.
+                # ponytail: asserts the 64-hex shape of `openssl rand -hex 32`; widen if the key
+                # format changes.
+                KEY='$(DEV_API_KEY)'
+                [ ${#KEY} -eq 64 ] || { echo "##vso[task.logissue type=error]DEV_API_KEY missing or malformed in variable group 'solvent' (expected 64 hex chars)"; exit 1; }
+                ACR_ID=$(az acr show -n $(az acr list -g solvent-rg --query '[0].name' -o tsv) -g solvent-rg --query id -o tsv)
+                ACR_SERVER=$(az acr show -n $(az acr list -g solvent-rg --query '[0].name' -o tsv) -g solvent-rg --query loginServer -o tsv)
+                terraform plan -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan-dev \
+                  -var image_tag=$(Build.SourceVersion) \
+                  -var approval_secret=$(DEV_APPROVAL_SECRET) \
+                  -var api_key="$KEY" \
+                  -var approvers=$(APPROVERS) \
+                  -var entra_tenant_id=$(ENTRA_TENANT_ID) \
+                  -var entra_audience=$(ENTRA_AUDIENCE) \
+                  -var registry_id="$ACR_ID" \
+                  -var registry_login_server="$ACR_SERVER"
+                # Same guard as the infra job's plan, applied to dev's own plan file.
+                terraform show -json $(Build.ArtifactStagingDirectory)/tfplan-dev \
+                  | jq -e '[.resource_changes[] | select(.change.actions | index("delete"))] | length == 0' >/dev/null \
+                  || { echo "##vso[task.logissue type=error]plan contains destroys — review by hand"; exit 1; }
+          - publish: $(Build.ArtifactStagingDirectory)/tfplan-dev
+            artifact: tfplan-dev
 
   - stage: Build
     dependsOn: Validate
@@ -116,7 +151,35 @@ stages:
   - stage: Deploy
     dependsOn: Build
     jobs:
+      - deployment: dev
+        environment: prod # same approval check as prod covers both; dev applies first so a
+        #                   module change that breaks an environment breaks the cheap one first
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: tfplan-dev
+                - template: install-tools.yml
+                - task: AzureCLI@2
+                  displayName: terraform apply (saved plan)
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true
+                    workingDirectory: infra
+                    inlineScript: |
+                      set -euo pipefail
+                      export ARM_USE_OIDC=true ARM_OIDC_TOKEN=$idToken ARM_CLIENT_ID=$servicePrincipalId \
+                             ARM_TENANT_ID=$tenantId ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                      cd envs/dev
+                      terraform init -input=false -backend-config=backend.hcl
+                      terraform apply -input=false $(Pipeline.Workspace)/tfplan-dev/tfplan-dev
+
       - deployment: prod
+        dependsOn: dev
         environment: prod # manual approval check lives on the environment, not in YAML
         strategy:
           runOnce:

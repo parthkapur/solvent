@@ -1,6 +1,3 @@
-# Committed on purpose: dev is only ever planned, never applied, so nothing here is a secret.
-image_tag       = "planonly"
-approval_secret = "plan-only-never-applied"
-api_key         = "plan-only-never-applied"
-approvers       = ""
-alert_email     = "nobody@example.com"
+# Non-secret dev settings only. api_key, approval_secret, approvers, image_tag, entra_* and the
+# registry coordinates all come from the pipeline, as they do for prod.
+alert_email = "nobody@example.com"

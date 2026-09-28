@@ -1,4 +1,4 @@
-"""The controls layer. Read tools run freely; write tools need a human-minted token."""
+"""The controls layer. Reads run freely unless gated; writes need a human-minted token."""
 
 import functools
 import hashlib
@@ -6,8 +6,10 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, NamedTuple
@@ -15,20 +17,32 @@ from typing import Any, NamedTuple
 import yaml
 from opentelemetry import metrics, trace
 
+from app import entra, nonces
+
 POLICY_PATH = Path(__file__).with_name("policy.yaml")
+
+# An HMAC is always 64 hex digits; a JWS header, base64url of `{"alg":...}`, never starts
+# with 64 hex-only characters. That shape - not the first ~ - is what tells a bare token
+# apart from a proven one, because an approver identity may itself contain a ~.
+_SIGNED = re.compile(r"[0-9a-f]{64}\.")
 _audit = logging.getLogger("solvent.audit")
 _meter = metrics.get_meter("solvent")
 _calls = _meter.create_counter("mcp.tool.calls", description="tool calls by decision")
 _latency = _meter.create_histogram("mcp.tool.latency_ms", unit="ms")
 
+# Set by the ASGI guard, read by every audit line in this request's context. A ContextVar rather
+# than a parameter because `governed` wraps tool functions that know nothing about transport.
+CALLER: ContextVar[str] = ContextVar("caller", default="")
 
 
 class Policy(NamedTuple):
-    """The three things that always travel together: what is gated, how long, and by whom."""
+    """The five things that always travel together: what is gated, how long, by whom, and why."""
 
     tools: dict[str, str]
     ttl_s: Mapping[str, int] = MappingProxyType({})
     approvers: tuple[str, ...] = ()
+    classification: Mapping[str, str] = MappingProxyType({})
+    gated: tuple[str, ...] = ()
 
     def ttl(self, tool: str) -> int:
         return self.ttl_s.get(tool, TOKEN_TTL_S)
@@ -44,26 +58,16 @@ def load_policy(path: Path = POLICY_PATH) -> Policy:
     # APPROVERS is set per environment by Terraform; the file is the default.
     env = [a.strip() for a in os.environ.get("APPROVERS", "").split(",") if a.strip()]
     approvers = tuple(env) or tuple(raw.get("approvers") or ())
-    return Policy(raw["tools"], raw.get("ttl_s") or {}, approvers)
+    return Policy(
+        raw["tools"],
+        raw.get("ttl_s") or {},
+        approvers,
+        raw.get("classification") or {},
+        tuple(raw.get("gated") or ()),
+    )
 
 
 POLICY = load_policy()
-
-# ponytail: in-process nonce ledger - correct at max_replicas = 1, and it empties on a cold
-# start, so a token can still be replayed across a restart inside its window. Move to an
-# Azure Table keyed by signature if the app is ever scaled out.
-_CONSUMED: dict[str, int] = {}
-
-
-def _consume(sig: str, ts: int, now: float, consumed: dict[str, int], max_ttl: int) -> bool:
-    """True the first time a signature is seen. Drops entries no live token could still hold."""
-    for s, t in list(consumed.items()):
-        if t < now - max_ttl:
-            del consumed[s]
-    if sig in consumed:
-        return False
-    consumed[sig] = ts
-    return True
 
 
 def canonical(args: dict[str, Any]) -> str:
@@ -93,33 +97,62 @@ def decide(
     policy: Policy,
     secret: str,
     now: float | None = None,
-    consumed: dict[str, int] | None = None,
+    consume: Callable[[str, int, float, int], bool] | None = None,
 ) -> tuple[str, str, str]:
     """(decision, reason, approved_by). approved_by is "" until a signature has verified."""
     cls = policy.tools.get(tool)
     if cls is None:
         return "denied", "not_in_policy", ""
-    if cls == "read":
+    # A read of gated data is not a free read: blast radius is not the only thing worth a human.
+    gated = policy.classification.get(tool) in policy.gated
+    if cls == "read" and not gated:
         return "allowed", "read", ""
+    missing = "classification_gated" if cls == "read" else "approval_required"
     if not secret:
         return "denied", "no_approval_secret", ""
-    sig, _, rest = str(args.get("approval_token", "")).partition(".")
+    # <jwt>~<hmac>.<ts>.<approver>, or the bare <hmac>.<ts>.<approver> from before proofs
+    # existed. _SIGNED, not the first ~, tells them apart: an approver identity may itself
+    # contain a ~, and then partitioning on it would split inside the identity rather than
+    # at the proof boundary.
+    raw = str(args.get("approval_token", ""))
+    if _SIGNED.match(raw):
+        proof, signed = "", raw
+    else:
+        proof, _, signed = raw.partition("~")
+    sig, _, rest = signed.partition(".")
     ts, _, approver = rest.partition(".")
-    if not ts.isdigit() or not approver:
-        return "denied", "approval_required", ""
+    # isdecimal(), not isdigit(): isdigit() is also true of superscripts like "²", which
+    # int() then rejects with ValueError - outside governed's try/finally, so that exception
+    # would skip _record and reach the caller as an unaudited 500. isdecimal() is exactly the
+    # set int() accepts.
+    if not ts.isdecimal() or not approver:
+        return "denied", missing, ""
     expected = mint_token(tool, _without_token(args), secret, approver, now=int(ts))
     # compare_digest refuses non-ASCII str, and an attacker picks the token; compare bytes.
     if not hmac.compare_digest(sig.encode(), expected.partition(".")[0].encode()):
-        return "denied", "approval_required", ""
+        return "denied", missing, ""
     # Past this line the identity is signed, so it is safe to name it in a denial.
+    if entra.configured():
+        claims = entra.verified_claims(proof)
+        if claims is None:
+            return "denied", "approver_unproven", approver
+        if approver not in entra.approver_names(claims):
+            return "denied", "approver_mismatch", approver
     if policy.approvers and approver not in policy.approvers:
         return "denied", "approver_not_authorized", approver
     if (now if now is not None else time.time()) - int(ts) > policy.ttl(tool):
         return "denied", "approval_expired", approver
-    if consumed is not None and not _consume(
-        sig, int(ts), now if now is not None else time.time(), consumed, policy.max_ttl
-    ):
-        return "denied", "approval_replayed", approver
+    if consume is not None:
+        # This runs before governed's try/finally, so a bare exception here would skip
+        # _record entirely - the one path this project exists to log. Deny and audit instead.
+        try:
+            first_use = consume(
+                sig, int(ts), now if now is not None else time.time(), policy.max_ttl
+            )
+        except Exception:  # noqa: BLE001 - any ledger failure is the same answer: deny
+            return "denied", "ledger_unavailable", approver
+        if not first_use:
+            return "denied", "approval_replayed", approver
     return "allowed", "approved", approver
 
 
@@ -134,7 +167,7 @@ def governed(fn):
     def wrapper(**kwargs: Any) -> dict[str, Any]:
         start = time.perf_counter()
         decision, reason, approved_by = decide(
-            tool, kwargs, POLICY, os.environ.get("APPROVAL_SECRET", ""), consumed=_CONSUMED
+            tool, kwargs, POLICY, os.environ.get("APPROVAL_SECRET", ""), consume=nonces.consume
         )
         try:
             if decision != "allowed":
@@ -157,6 +190,7 @@ def audit_event(**fields: Any) -> None:
     ctx = trace.get_current_span().get_span_context()
     event = {
         "ts": time.time(),
+        "caller": CALLER.get(),
         **fields,
         "trace_id": format(ctx.trace_id, "032x"),
         "span_id": format(ctx.span_id, "016x"),

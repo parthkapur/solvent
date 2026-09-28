@@ -5,12 +5,14 @@ import logging
 import os
 from typing import Any
 
+import anyio.to_thread
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app import azure_clients as az
+from app import entra, policy
 from app.policy import audit_event, governed
 
 if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
@@ -23,16 +25,18 @@ logging.getLogger("azure").setLevel(logging.WARNING)  # SDK request/response cha
 mcp = MCPServer(
     "solvent",
     instructions=(
-        "Read tools are free. restart_container_app needs an approval_token minted by a human; "
-        "if you get {denied: true, reason: approval_required}, ask the operator for one."
+        "Most read tools are free; a gated classification (see get_cost_summary) or any write "
+        "needs an approval_token minted by a human; a denial of approval_required or "
+        "classification_gated means: ask the operator for one."
     ),
 )
 
 
 @mcp.tool()
 @governed
-def get_cost_summary(days: int = 7) -> dict[str, Any]:
-    """Actual cost by resource group over the last N days. Read-only."""
+def get_cost_summary(days: int = 7, approval_token: str = "") -> dict[str, Any]:
+    """Actual cost by resource group over the last N days. Read-only, but FINANCIAL:
+    requires a human-minted approval_token."""
     return az.cost_summary(days)
 
 
@@ -55,7 +59,10 @@ async def index(_: Request) -> JSONResponse:
     return JSONResponse(
         {
             "service": "solvent",
-            "description": "Governed MCP server: read tools run freely, write tools need a human-minted approval token.",
+            "description": (
+                "Governed MCP server: reads run freely unless gated by classification, "
+                "writes always need a human-minted approval token."
+            ),
             "endpoints": {"mcp": "/mcp (POST, streamable HTTP)", "health": "/healthz"},
             "source": "https://github.com/parthkapur/solvent",
         }
@@ -70,24 +77,46 @@ async def healthz(_: Request) -> JSONResponse:
 API_KEY = os.environ.get("API_KEY", "")
 
 
-def require_key(asgi):
-    """Bearer-key guard over /mcp. / and /healthz stay open for probes and the smoke test.
+def _authenticate(offered: bytes) -> tuple[str | None, str]:
+    """(caller, reason) for this request. caller is None to deny; reason then says why.
 
-    ponytail: one shared key, so the audit log names the approver but not the caller.
-    Upgrade path is an Entra-issued JWT verified against the tenant JWKS.
+    A verified JWT names a person; the shared key cannot, so it is audited as `shared_key`
+    and the weaker path stays visible in the record instead of looking like the strong one.
+    Nothing configured leaves the local server open, as it always has.
     """
+    if not API_KEY and not entra.configured():
+        return "local_no_auth", ""  # nothing configured: the local server stays open
+    if API_KEY and hmac.compare_digest(offered, b"Bearer " + API_KEY.encode()):
+        return "shared_key", ""
+    if entra.configured() and offered.startswith(b"Bearer "):
+        claims = entra.verified_claims(offered[7:].decode("ascii", "ignore"))
+        if claims:
+            return entra.caller_name(claims) or "verified_no_identity", ""
+    if not offered:
+        return None, "unauthenticated"
+    return None, "caller_token_invalid"
+
+
+def require_key(asgi):
+    """Caller guard over /mcp. / and /healthz stay open for probes and the smoke test."""
 
     async def guard(scope, receive, send):
-        if scope["type"] == "http" and API_KEY and scope["path"].startswith("/mcp"):
+        if scope["type"] == "http" and scope["path"].startswith("/mcp"):
             # Stay in bytes: compare_digest refuses non-ASCII str, and .decode() would
             # raise on a header that is not valid UTF-8. The caller picks both.
             offered = dict(scope["headers"]).get(b"authorization", b"")
-            if not hmac.compare_digest(offered, b"Bearer " + API_KEY.encode()):
-                audit_event(tool="mcp", decision="denied", reason="unauthenticated")
-                await JSONResponse({"denied": True, "reason": "unauthenticated"}, status_code=401)(
+            # _authenticate can hit the tenant's JWKS endpoint over plain urllib, which blocks
+            # the event loop for up to its timeout - at max_replicas = 1 that stalls /healthz
+            # too, and Container Apps restarts the app on the failed liveness probe. Off the
+            # loop, same as MCP already runs sync tool functions in a worker thread.
+            caller, reason = await anyio.to_thread.run_sync(_authenticate, offered)
+            if caller is None:
+                audit_event(tool="mcp", decision="denied", reason=reason)
+                await JSONResponse({"denied": True, "reason": reason}, status_code=401)(
                     scope, receive, send
                 )
                 return
+            policy.CALLER.set(caller)
         await asgi(scope, receive, send)
 
     return guard

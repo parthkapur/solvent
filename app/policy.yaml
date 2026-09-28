@@ -13,3 +13,14 @@ ttl_s:
 # Who may mint an approval. Empty means anyone holding APPROVAL_SECRET, which is
 # what local development wants. Terraform sets APPROVERS in the deployed app.
 approvers: []
+
+# What the data is, independent of blast radius. A read can be harmless to run and still
+# expose something commercially sensitive - that's a second axis on top of read/write.
+classification:
+  get_cost_summary: financial  # spend is commercially sensitive even though reading is harmless
+  get_resource_health: operational
+  restart_container_app: operational
+
+# Any classification listed here takes the approval path even for a read.
+gated:
+  - financial

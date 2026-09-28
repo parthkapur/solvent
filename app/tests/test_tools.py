@@ -38,11 +38,20 @@ async def test_lists_three_tools():
 
 
 async def test_read_tool_returns_structured(caplog):
+    tok = policy.mint_token("get_cost_summary", {"days": 3}, SECRET, APPROVER)
     with caplog.at_level(logging.INFO, logger="solvent.audit"):
-        r = await server.mcp.call_tool("get_cost_summary", {"days": 3})
+        r = await server.mcp.call_tool(
+            "get_cost_summary", {"days": 3, "approval_token": tok}
+        )
     assert r.structured_content == {"days": 3, "rows": []}
     ev = json.loads(caplog.records[-1].message)
     assert (ev["tool"], ev["decision"]) == ("get_cost_summary", "allowed")
+
+
+async def test_gated_read_denied_without_token():
+    r = await server.mcp.call_tool("get_cost_summary", {"days": 3})
+    assert r.is_error is False
+    assert r.structured_content == {"denied": True, "reason": "classification_gated"}
 
 
 async def test_write_tool_denied_without_token():
@@ -118,3 +127,116 @@ def test_non_ascii_auth_header_denied_not_crashed(monkeypatch, http):
         },
     )
     assert r.status_code == 401
+
+
+def test_jwt_caller_is_allowed_without_shared_key(monkeypatch, http):
+    """A verified JWT gets in on its own; the shared key does not need to be set."""
+    monkeypatch.setattr(server, "API_KEY", "")
+    monkeypatch.setattr(server.entra, "configured", lambda: True)
+    monkeypatch.setattr(server.entra, "verified_claims", lambda t: {"oid": "caller-oid"})
+    monkeypatch.setattr(server.entra, "caller_name", lambda c: c["oid"])
+    r = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={
+            "accept": "application/json, text/event-stream",
+            "authorization": "Bearer a.jwt.here",
+        },
+    )
+    assert r.status_code == 200
+
+
+def test_an_unverifiable_jwt_is_401(monkeypatch, http):
+    """A token that fails verification is a distinct denial from a missing header."""
+    monkeypatch.setattr(server, "API_KEY", "")
+    monkeypatch.setattr(server.entra, "configured", lambda: True)
+    monkeypatch.setattr(server.entra, "verified_claims", lambda t: None)
+    r = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={
+            "accept": "application/json, text/event-stream",
+            "authorization": "Bearer forged",
+        },
+    )
+    assert r.status_code == 401
+    assert r.json() == {"denied": True, "reason": "caller_token_invalid"}
+
+
+def test_wrong_key_is_caller_token_invalid(monkeypatch, http):
+    """A header that names neither the shared key nor a verifiable JWT gets its own reason,
+    distinct from a request that offered no Authorization header at all."""
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    r = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={"accept": "application/json, text/event-stream", "authorization": "Bearer nope"},
+    )
+    assert r.status_code == 401
+    assert r.json() == {"denied": True, "reason": "caller_token_invalid"}
+
+
+def test_entra_configured_but_no_header_is_unauthenticated(monkeypatch, http):
+    """Entra alone being configured must still deny a bare request, not open the server."""
+    monkeypatch.setattr(server, "API_KEY", "")
+    monkeypatch.setattr(server.entra, "configured", lambda: True)
+    r = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={"accept": "application/json, text/event-stream"},
+    )
+    assert r.status_code == 401
+    assert r.json() == {"denied": True, "reason": "unauthenticated"}
+
+
+def test_jwt_caller_is_named_in_a_real_audit_line(monkeypatch, http, caplog):
+    """tools/list never touches policy._record, so the caller has to be proven through a
+    governed tool call: a write with no approval_token is denied but still audited, and that
+    audit line has to carry the JWT caller through the guard's contextvar into the tool call."""
+    monkeypatch.setattr(server, "API_KEY", "")
+    monkeypatch.setattr(server.entra, "configured", lambda: True)
+    monkeypatch.setattr(server.entra, "verified_claims", lambda t: {"oid": "caller-oid"})
+    monkeypatch.setattr(server.entra, "caller_name", lambda c: c["oid"])
+    with caplog.at_level(logging.INFO, logger="solvent.audit"):
+        r = http.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "restart_container_app", "arguments": {"name": "x"}},
+            },
+            headers={
+                "accept": "application/json, text/event-stream",
+                "authorization": "Bearer a.jwt.here",
+            },
+        )
+    assert r.status_code == 200
+    events = [json.loads(rec.message) for rec in caplog.records if rec.name == "solvent.audit"]
+    assert any(
+        e["tool"] == "restart_container_app" and e["caller"] == "caller-oid" for e in events
+    )
+
+
+def test_shared_key_is_named_in_a_real_audit_line(monkeypatch, http, caplog):
+    """The shared key names itself, not a person, in the same real audit line."""
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    with caplog.at_level(logging.INFO, logger="solvent.audit"):
+        r = http.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "restart_container_app", "arguments": {"name": "x"}},
+            },
+            headers={
+                "accept": "application/json, text/event-stream",
+                "authorization": "Bearer k3y",
+            },
+        )
+    assert r.status_code == 200
+    events = [json.loads(rec.message) for rec in caplog.records if rec.name == "solvent.audit"]
+    assert any(
+        e["tool"] == "restart_container_app" and e["caller"] == "shared_key" for e in events
+    )

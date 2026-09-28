@@ -2,15 +2,47 @@ import inspect
 import json
 import logging
 
-from app import policy
+from app import nonces, policy
 
 POLICY = policy.Policy({"read_tool": "read", "write_tool": "write"})
 SECRET = "s3cret"
 APPROVER = "ops@example.com"
+GATED = policy.Policy(
+    {"get_cost_summary": "read", "read_tool": "read", "restart_container_app": "write"},
+    classification={"get_cost_summary": "financial"},
+    gated=("financial",),
+)
 
 
 def test_read_allowed():
     assert policy.decide("read_tool", {}, POLICY, SECRET) == ("allowed", "read", "")
+
+
+def test_a_gated_read_needs_an_approval():
+    decision, reason, _ = policy.decide("get_cost_summary", {}, GATED, SECRET)
+    assert (decision, reason) == ("denied", "classification_gated")
+
+
+def test_a_gated_read_runs_with_an_approval():
+    tok = policy.mint_token("get_cost_summary", {}, SECRET, APPROVER)
+    decision, reason, who = policy.decide(
+        "get_cost_summary", {"approval_token": tok}, GATED, SECRET
+    )
+    assert (decision, reason, who) == ("allowed", "approved", APPROVER)
+
+
+def test_an_unclassified_read_still_runs_freely():
+    decision, reason, _ = policy.decide("read_tool", {}, GATED, SECRET)
+    assert (decision, reason) == ("allowed", "read")
+
+
+def test_load_policy_reads_classification_and_gated(tmp_path):
+    f = tmp_path / "policy.yaml"
+    f.write_text(
+        "tools:\n  a: read\nclassification:\n  a: financial\ngated:\n  - financial\n"
+    )
+    p = policy.load_policy(f)
+    assert p.classification == {"a": "financial"} and p.gated == ("financial",)
 
 
 def test_unknown_tool_denied():
@@ -61,7 +93,8 @@ def test_governed_emits_audit(monkeypatch, caplog):
     events = [json.loads(r.message) for r in caplog.records if r.name == "solvent.audit"]
     assert [e["decision"] for e in events] == ["denied", "allowed"]
     assert set(events[0]) == {
-        "ts", "tool", "args_hash", "decision", "reason", "latency_ms", "trace_id", "span_id",
+        "ts", "caller", "tool", "args_hash", "decision", "reason", "latency_ms", "trace_id",
+        "span_id",
     }
     assert set(events[1]) == set(events[0]) | {"approved_by"}
     assert events[0]["tool"] == "write_tool"
@@ -83,6 +116,26 @@ def test_approve_cli(monkeypatch, capsys):
     approve.main(["--approver", APPROVER, "write_tool", "name=x"])
     out = capsys.readouterr().out.strip()
     assert out == policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+
+
+def test_approve_cli_coerces_numeric_args(monkeypatch, capsys):
+    """`days=3` on the CLI must sign as the int 3, matching what the server's schema coerces
+    args to - a str `"3"` would canonicalise differently and the HMAC would never match."""
+    from app import approve
+
+    monkeypatch.setenv("APPROVAL_SECRET", SECRET)
+    approve.main(["--approver", APPROVER, "get_cost_summary", "days=3"])
+    tok = capsys.readouterr().out.strip()
+    gated = policy.Policy(
+        {"get_cost_summary": "read"}, classification={"get_cost_summary": "financial"},
+        gated=("financial",),
+    )
+    args = {"days": 3, "approval_token": tok}
+    assert policy.decide("get_cost_summary", args, gated, SECRET) == (
+        "allowed",
+        "approved",
+        APPROVER,
+    )
 
 
 def test_approve_cli_defaults_to_the_signed_in_user(monkeypatch, capsys):
@@ -200,6 +253,18 @@ def test_swapped_approver_denied():
     assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required", "")
 
 
+def test_superscript_timestamp_denied_not_crashed():
+    """str.isdigit() is also true of "²", which int() then rejects with ValueError - and
+    decide() runs outside governed's try/finally, so that would reach the caller as an
+    unaudited crash rather than a denial. isdecimal() is exactly the set int() accepts."""
+    args = {"name": "x", "approval_token": "a" * 64 + ".².bob"}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == (
+        "denied",
+        "approval_required",
+        "",
+    )
+
+
 def test_token_without_approver_denied():
     args = {"name": "x", "approval_token": "deadbeef.1700000000"}
     assert policy.decide("write_tool", args, POLICY, SECRET) == ("denied", "approval_required", "")
@@ -271,13 +336,28 @@ def test_env_var_overrides_the_file(tmp_path, monkeypatch):
 
 
 def test_token_is_single_use():
-    consumed: dict[str, int] = {}
+    consume = nonces.local_consumer()
     tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
     args = {"name": "x", "approval_token": tok}
-    first = policy.decide("write_tool", args, POLICY, SECRET, consumed=consumed)
-    second = policy.decide("write_tool", args, POLICY, SECRET, consumed=consumed)
+    first = policy.decide("write_tool", args, POLICY, SECRET, consume=consume)
+    second = policy.decide("write_tool", args, POLICY, SECRET, consume=consume)
     assert first == ("allowed", "approved", APPROVER)
     assert second == ("denied", "approval_replayed", APPROVER)
+
+
+def test_ledger_outage_is_denied_and_audited():
+    """An outage in the ledger must deny and be named, not crash before governed can log it."""
+
+    def boom(sig, ts, now, max_ttl):
+        raise RuntimeError("table unavailable")
+
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET, consume=boom) == (
+        "denied",
+        "ledger_unavailable",
+        APPROVER,
+    )
 
 
 def test_replay_check_is_opt_in():
@@ -294,7 +374,9 @@ def test_expired_beats_replayed():
     tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000)
     args = {"name": "x", "approval_token": tok}
     assert (
-        policy.decide("write_tool", args, POLICY, SECRET, now=1601, consumed=consumed)[1]
+        policy.decide(
+            "write_tool", args, POLICY, SECRET, now=1601, consume=nonces.local_consumer(consumed)
+        )[1]
         == "approval_expired"
     )
     assert consumed == {}  # an expired token must not burn a ledger slot
@@ -302,23 +384,24 @@ def test_expired_beats_replayed():
 
 def test_consumed_ledger_is_pruned():
     consumed: dict[str, int] = {}
+    consume = nonces.local_consumer(consumed)
     old = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000)
     policy.decide(
         "write_tool", {"name": "x", "approval_token": old}, POLICY, SECRET,
-        now=1000, consumed=consumed,
+        now=1000, consume=consume,
     )
     assert len(consumed) == 1
     fresh = policy.mint_token("write_tool", {"name": "y"}, SECRET, APPROVER, now=9000)
     policy.decide(
         "write_tool", {"name": "y", "approval_token": fresh}, POLICY, SECRET,
-        now=9000, consumed=consumed,
+        now=9000, consume=consume,
     )
     assert len(consumed) == 1  # the 1000s entry aged out of every possible window
 
 
 def test_governed_rejects_a_replayed_token(monkeypatch):
     monkeypatch.setattr(policy, "POLICY", POLICY)
-    monkeypatch.setattr(policy, "_CONSUMED", {})
+    monkeypatch.setattr(policy.nonces, "_PROCESS", {})
     monkeypatch.setenv("APPROVAL_SECRET", SECRET)
 
     @policy.governed
@@ -344,3 +427,73 @@ def test_non_ascii_approver_round_trips():
     tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, who)
     args = {"name": "x", "approval_token": tok}
     assert policy.decide("write_tool", args, POLICY, SECRET) == ("allowed", "approved", who)
+
+
+def _entra_on(monkeypatch, names=None):
+    names = names or {"ops@example.com"}
+    monkeypatch.setattr(policy.entra, "configured", lambda: True)
+    monkeypatch.setattr(policy.entra, "verified_claims", lambda t: {"tok": t} if t else None)
+    monkeypatch.setattr(policy.entra, "approver_names", lambda c: names)
+
+
+def test_proof_is_required_once_entra_is_configured(monkeypatch):
+    _entra_on(monkeypatch)
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    decision, reason, _ = policy.decide(
+        "write_tool", {"name": "x", "approval_token": tok}, POLICY, SECRET
+    )
+    assert (decision, reason) == ("denied", "approver_unproven")
+
+
+def test_a_proven_approver_is_allowed(monkeypatch):
+    _entra_on(monkeypatch)
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    decision, reason, who = policy.decide(
+        "write_tool", {"name": "x", "approval_token": f"a.jwt.here~{tok}"}, POLICY, SECRET
+    )
+    assert (decision, reason, who) == ("allowed", "approved", APPROVER)
+
+
+def test_a_token_proving_someone_else_is_denied(monkeypatch):
+    _entra_on(monkeypatch, names={"someone.else@example.com"})
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    decision, reason, _ = policy.decide(
+        "write_tool", {"name": "x", "approval_token": f"a.jwt.here~{tok}"}, POLICY, SECRET
+    )
+    assert (decision, reason) == ("denied", "approver_mismatch")
+
+
+def test_proof_is_skipped_when_entra_is_absent(monkeypatch):
+    monkeypatch.setattr(policy.entra, "configured", lambda: False)
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER)
+    decision, reason, _ = policy.decide(
+        "write_tool", {"name": "x", "approval_token": tok}, POLICY, SECRET
+    )
+    assert (decision, reason) == ("allowed", "approved")
+
+
+def test_approver_containing_tilde_survives_unproven():
+    """An identity may itself contain ~; a bare token still has to parse by HMAC shape, not by
+
+    splitting on the first ~, or the split would land inside the identity instead of at a
+    (non-existent) proof boundary.
+    """
+    who = "a~b"
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, who)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET) == ("allowed", "approved", who)
+
+
+def test_approver_containing_tilde_survives_with_proof(monkeypatch):
+    """Same identity, but now a real proof is prepended - the first ~ is still the proof
+
+    boundary because a JWT itself can never contain one, so the split must not be fooled by
+    a second ~ further along inside the identity.
+    """
+    who = "a~b"
+    _entra_on(monkeypatch, names={who})
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, who)
+    decision, reason, approver = policy.decide(
+        "write_tool", {"name": "x", "approval_token": f"a.jwt.here~{tok}"}, POLICY, SECRET
+    )
+    assert (decision, reason, approver) == ("allowed", "approved", who)

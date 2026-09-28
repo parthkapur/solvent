@@ -12,6 +12,9 @@ dependencies = [
   "azure-mgmt-appcontainers>=3",
   "azure-monitor-opentelemetry>=1.6",
   "httpx>=0.27",
+  "pyjwt[crypto]>=2.9",
+  "azure-data-tables>=12",
+  "anyio>=4.15.1",
 ]
 
 [dependency-groups]
