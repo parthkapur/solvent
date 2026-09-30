@@ -75,6 +75,7 @@ def canonical(args: dict[str, Any]) -> str:
 
 
 TOKEN_TTL_S = 600  # an approval is for "now", not forever
+CLOCK_SKEW_S = 60  # how far ahead of the server's clock an approver's clock may run
 
 
 def mint_token(
@@ -140,8 +141,13 @@ def decide(
             return "denied", "approver_mismatch", approver
     if policy.approvers and approver not in policy.approvers:
         return "denied", "approver_not_authorized", approver
-    if (now if now is not None else time.time()) - int(ts) > policy.ttl(tool):
+    age = (now if now is not None else time.time()) - int(ts)
+    if age > policy.ttl(tool):
         return "denied", "approval_expired", approver
+    # A future timestamp makes age negative, which the check above never catches: a token
+    # dated a year ahead would stay good for a year. Allow a little clock skew, nothing more.
+    if age < -CLOCK_SKEW_S:
+        return "denied", "approval_not_yet_valid", approver
     if consume is not None:
         # This runs before governed's try/finally, so a bare exception here would skip
         # _record entirely - the one path this project exists to log. Deny and audit instead.

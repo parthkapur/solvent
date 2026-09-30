@@ -175,6 +175,48 @@ def test_expired_token_denied():
     )
 
 
+def test_future_dated_token_denied():
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000 + 86400)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000) == (
+        "denied",
+        "approval_not_yet_valid",
+        APPROVER,
+    )
+
+
+def test_small_clock_skew_is_tolerated():
+    tok = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1030)
+    args = {"name": "x", "approval_token": tok}
+    assert policy.decide("write_tool", args, POLICY, SECRET, now=1000)[0] == "allowed"
+
+
+def test_approve_cli_fills_defaults_the_server_fills(monkeypatch, capsys):
+    """The server hands governed `days=7` even when the call omits it; a token minted without
+    it must still verify, or an approver has to know every default to approve anything."""
+    from app import approve
+
+    monkeypatch.setenv("APPROVAL_SECRET", SECRET)
+    approve.main(["--approver", APPROVER, "get_cost_summary"])
+    tok = capsys.readouterr().out.strip()
+    args = {"days": 7, "approval_token": tok}
+    assert policy.decide("get_cost_summary", args, GATED, SECRET)[:2] == ("allowed", "approved")
+
+
+def test_approve_cli_keeps_str_params_as_strings(monkeypatch, capsys):
+    """`name=null` is a valid app name; it must sign as the string the server receives."""
+    from app import approve
+
+    monkeypatch.setenv("APPROVAL_SECRET", SECRET)
+    approve.main(["--approver", APPROVER, "restart_container_app", "name=null"])
+    tok = capsys.readouterr().out.strip()
+    args = {"name": "null", "approval_token": tok}
+    assert policy.decide("restart_container_app", args, GATED, SECRET)[:2] == (
+        "allowed",
+        "approved",
+    )
+
+
 def test_tampered_timestamp_denied():
     sig, ts, who = policy.mint_token("write_tool", {"name": "x"}, SECRET, APPROVER, now=1000).split(
         ".", 2

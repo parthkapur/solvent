@@ -27,6 +27,36 @@ def _coerce(v: str) -> object:
         return v
 
 
+def _signed_args(tool: str, pairs: list[str]) -> dict[str, object]:
+    """The args exactly as the server will see them, so the HMAC matches.
+
+    The server validates a call against the tool's signature before governed signs over it:
+    omitted params arrive filled with their defaults, and a `str` param stays a string even when
+    it looks like JSON (`name=null`, `name=123`). Reading the same signature here reproduces both.
+    A tool the server does not define falls back to guessing from the value's shape.
+    """
+    import inspect
+
+    from app import server
+
+    given = dict(p.split("=", 1) for p in pairs)
+    fn = getattr(server, tool, None)
+    if fn is None:
+        return {k: _coerce(v) for k, v in given.items()}
+    args: dict[str, object] = {}
+    for name, param in inspect.signature(fn).parameters.items():
+        if name == "approval_token":
+            continue
+        if name in given:
+            v = given.pop(name)
+            args[name] = v if param.annotation is str else _coerce(v)
+        elif param.default is not inspect.Parameter.empty:
+            args[name] = param.default
+    if given:
+        raise SystemExit(f"{tool} takes no argument(s): {', '.join(given)}")
+    return args
+
+
 def signed_in_user() -> str:
     """Whoever `az login` says you are. Exits rather than minting an unattributable token.
 
@@ -70,7 +100,7 @@ def main(argv: list[str]) -> None:
     if argv[:1] == ["--approver"]:
         approver, argv = argv[1], argv[2:]
     tool, *pairs = argv
-    args = {k: _coerce(v) for k, v in (p.split("=", 1) for p in pairs)}
+    args = _signed_args(tool, pairs)
     token = mint_token(tool, args, os.environ["APPROVAL_SECRET"], approver or signed_in_user())
     audience = os.environ.get("ENTRA_AUDIENCE", "")
     print(f"{entra_proof(audience)}~{token}" if audience else token)

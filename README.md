@@ -95,7 +95,7 @@ gated:
    (`approval_required`/`classification_gated`), the approver's own proof when Entra is
    configured (`approver_unproven`, `approver_mismatch` if it verifies but names someone else),
    allow-list (`approver_not_authorized`), age (`approval_expired` — 600s by default, 120s for
-   `restart_container_app`), reuse (`approval_replayed`, `ledger_unavailable` if the replay
+   `restart_container_app`; `approval_not_yet_valid` if dated more than 60s ahead), reuse (`approval_replayed`, `ledger_unavailable` if the replay
    ledger itself cannot answer). The allow-list is checked *after* the signature so an unsigned
    claim never reveals who is on it.
 4. Denials and tool errors are returned as structured content, not raised.
@@ -118,6 +118,7 @@ Every reason the gate and the caller guard produce:
 | `approver_unproven` | denied | Entra is configured and the approval's proof is missing, or present but does not verify (invalid or expired) |
 | `approver_mismatch` | denied | the approver's token verified but names someone else |
 | `approval_expired` | denied | the token is older than its tool's window |
+| `approval_not_yet_valid` | denied | the token is dated more than 60s ahead of the server's clock |
 | `approval_replayed` | denied | the signature has already been consumed |
 | `ledger_unavailable` | denied | the replay ledger (Azure Table or in-process dict) raised instead of answering |
 | `unauthenticated` | denied, 401 | `/mcp` got no `Authorization` header at all |
@@ -208,14 +209,14 @@ Then, in the chat:
    has a 120s window, not the 600s default.
 7. **Same token, twice.** Approve a restart, then ask for the same restart again with the same
    token. Denied, `approval_replayed`.
-8. **An identity that is not on the list.** Mint with `--approver someone@else.com`. With
-   `ENTRA_TENANT_ID`/`ENTRA_AUDIENCE` configured — the state this plan deploys — the proof is
-   checked first: it still names the real signed-in operator, not the relabelled claim, so this
-   denies `approver_mismatch` before the allow-list is ever consulted (a token with no proof
-   attached at all would instead deny `approver_unproven`, and only once a proof verifies for the
-   claimed approver does the allow-list get a say, denying `approver_not_authorized`). On the live
-   app today, with Entra unconfigured, the proof check is skipped and this denies
-   `approver_not_authorized` directly — the audit line names the identity that tried either way.
+8. **An identity that is not on the list.** Mint with `--approver someone@else.com`. The live
+   app has `ENTRA_TENANT_ID`/`ENTRA_AUDIENCE` configured, so the proof is checked first: it still
+   names the real signed-in operator, not the relabelled claim, so this denies
+   `approver_mismatch` before the allow-list is ever consulted (a token with no proof attached at
+   all would instead deny `approver_unproven`, and only once a proof verifies for the claimed
+   approver does the allow-list get a say, denying `approver_not_authorized`). A deployment
+   without Entra skips the proof check and denies `approver_not_authorized` directly — the audit
+   line names the identity that tried either way.
 9. **Unknown tool.** Any MCP call to a tool name not in `policy.yaml` gets
    `{"denied": true, "reason": "not_in_policy"}`.
 10. **No key at all.** `curl` `/mcp` without the header: 401, and an audit line with
