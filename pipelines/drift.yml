@@ -42,13 +42,21 @@ steps:
         # format changes.
         KEY='$(API_KEY)'
         [ ${#KEY} -eq 64 ] || { echo "##vso[task.logissue type=error]API_KEY missing or malformed in variable group 'solvent' (expected 64 hex chars)"; exit 1; }
+        # Every variable the deploy plan passes must be passed here too, or its default ("")
+        # reads as a change and every night reports drift that isn't there.
+        need() { case "$2" in ''|'$('*) echo "##vso[task.logissue type=error]$1 missing from variable group 'solvent'"; exit 1;; esac; }
+        APPROVERS='$(APPROVERS)'; need APPROVERS "$APPROVERS"
+        TENANT='$(ENTRA_TENANT_ID)'; need ENTRA_TENANT_ID "$TENANT"
+        AUDIENCE='$(ENTRA_AUDIENCE)'; need ENTRA_AUDIENCE "$AUDIENCE"
         set +e
         terraform plan -input=false -detailed-exitcode \
           -var image_tag="$TAG" \
           -var approval_secret=$(APPROVAL_SECRET) \
           -var api_key="$KEY" \
-          -var approvers=$(APPROVERS) \
-          -var alert_email=$(ALERT_EMAIL)
+          -var approvers="$APPROVERS" \
+          -var alert_email=$(ALERT_EMAIL) \
+          -var entra_tenant_id="$TENANT" \
+          -var entra_audience="$AUDIENCE"
         rc=$?
         set -e
         if [ $rc -eq 2 ]; then

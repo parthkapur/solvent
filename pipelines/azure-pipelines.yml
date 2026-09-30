@@ -60,14 +60,21 @@ stages:
                 # format changes.
                 KEY='$(API_KEY)'
                 [ ${#KEY} -eq 64 ] || { echo "##vso[task.logissue type=error]API_KEY missing or malformed in variable group 'solvent' (expected 64 hex chars)"; exit 1; }
+                # Same trap, worse outcome: each of these arriving empty switches a control off
+                # rather than failing - an empty allow-list lets any secret-holder approve, and an
+                # empty tenant or audience turns off JWT auth and the approver proof.
+                need() { case "$2" in ''|'$('*) echo "##vso[task.logissue type=error]$1 missing from variable group 'solvent'"; exit 1;; esac; }
+                APPROVERS='$(APPROVERS)'; need APPROVERS "$APPROVERS"
+                TENANT='$(ENTRA_TENANT_ID)'; need ENTRA_TENANT_ID "$TENANT"
+                AUDIENCE='$(ENTRA_AUDIENCE)'; need ENTRA_AUDIENCE "$AUDIENCE"
                 terraform plan -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan \
                   -var image_tag=$(Build.SourceVersion) \
                   -var approval_secret=$(APPROVAL_SECRET) \
                   -var api_key="$KEY" \
-                  -var approvers=$(APPROVERS) \
+                  -var approvers="$APPROVERS" \
                   -var alert_email=$(ALERT_EMAIL) \
-                  -var entra_tenant_id=$(ENTRA_TENANT_ID) \
-                  -var entra_audience=$(ENTRA_AUDIENCE)
+                  -var entra_tenant_id="$TENANT" \
+                  -var entra_audience="$AUDIENCE"
                 # Nothing here fails the build on a destroy. Expected plans are creates-plus-
                 # in-place-changes; a delete showing up is either a verified-safe replacement
                 # (the ACR, via the module's moved block) or something nobody has checked
@@ -111,6 +118,11 @@ stages:
                 # format changes.
                 KEY='$(DEV_API_KEY)'
                 [ ${#KEY} -eq 64 ] || { echo "##vso[task.logissue type=error]DEV_API_KEY missing or malformed in variable group 'solvent' (expected 64 hex chars)"; exit 1; }
+                # Same fail-closed check as the infra job's plan: empty would switch controls off.
+                need() { case "$2" in ''|'$('*) echo "##vso[task.logissue type=error]$1 missing from variable group 'solvent'"; exit 1;; esac; }
+                APPROVERS='$(APPROVERS)'; need APPROVERS "$APPROVERS"
+                TENANT='$(ENTRA_TENANT_ID)'; need ENTRA_TENANT_ID "$TENANT"
+                AUDIENCE='$(ENTRA_AUDIENCE)'; need ENTRA_AUDIENCE "$AUDIENCE"
                 ACR_ID=$(az acr show -n $(az acr list -g solvent-rg --query '[0].name' -o tsv) -g solvent-rg --query id -o tsv)
                 ACR_SERVER=$(az acr show -n $(az acr list -g solvent-rg --query '[0].name' -o tsv) -g solvent-rg --query loginServer -o tsv)
                 # A trial subscription allows one Container App Environment per region, so dev
@@ -121,9 +133,9 @@ stages:
                   -var image_tag=$(Build.SourceVersion) \
                   -var approval_secret=$(DEV_APPROVAL_SECRET) \
                   -var api_key="$KEY" \
-                  -var approvers=$(APPROVERS) \
-                  -var entra_tenant_id=$(ENTRA_TENANT_ID) \
-                  -var entra_audience=$(ENTRA_AUDIENCE) \
+                  -var approvers="$APPROVERS" \
+                  -var entra_tenant_id="$TENANT" \
+                  -var entra_audience="$AUDIENCE" \
                   -var registry_id="$ACR_ID" \
                   -var registry_login_server="$ACR_SERVER" \
                   -var container_app_environment_id="$CAE_ID"
@@ -222,7 +234,11 @@ stages:
                         -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
                         -H "authorization: Bearer $(API_KEY)" \
                         -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-                        | grep -q restart_container_app && echo "smoke ok"
+                        | grep -q restart_container_app \
+                        || { echo "tools/list did not return the tools"; exit 1; }
+                      # `|| exit`, not `&& echo`: set -e ignores a failure on the left of &&, so
+                      # that form let a missing tool list pass the smoke test.
+                      echo "smoke ok"
                       # Prove the gate is closed rather than assuming it.
                       code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/mcp" \
                         -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
