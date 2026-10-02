@@ -93,8 +93,8 @@ def test_governed_emits_audit(monkeypatch, caplog):
     events = [json.loads(r.message) for r in caplog.records if r.name == "solvent.audit"]
     assert [e["decision"] for e in events] == ["denied", "allowed"]
     assert set(events[0]) == {
-        "ts", "caller", "tool", "args_hash", "decision", "reason", "latency_ms", "trace_id",
-        "span_id",
+        "ts", "caller", "tool", "args_hash", "decision", "reason", "latency_ms", "gate_ms",
+        "trace_id", "span_id",
     }
     assert set(events[1]) == set(events[0]) | {"approved_by"}
     assert events[0]["tool"] == "write_tool"

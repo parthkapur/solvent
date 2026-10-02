@@ -12,7 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app import azure_clients as az
-from app import entra, policy
+from app import entra, faults, policy
 from app.policy import audit_event, governed
 
 if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
@@ -117,6 +117,7 @@ def require_key(asgi):
                 )
                 return
             policy.CALLER.set(caller)
+            faults.FAULT_MS.set(faults.from_header(dict(scope["headers"]).get(faults.HEADER, b"")))
         await asgi(scope, receive, send)
 
     return guard

@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solvent mission control</title>
+<style>
+:root {
+  color-scheme: light;
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink-2:#52514e; --muted:#6b6a66;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --allowed:#2a78d6; --denied:#eb6834; --fault:#eda100; --azure:#1baf7a;
+  --allowed-ink:#1c5cab; --denied-ink:#a8410f; --fault-ink:#7a5200;
+  --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+  --good-ink:#006300; --warn-ink:#7a5200; --crit-ink:#a32222; --focus:#2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7; --muted:#a3a297;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --allowed:#3987e5; --denied:#d95926; --fault:#c98500; --azure:#199e70;
+    --allowed-ink:#5c9df0; --denied-ink:#ec835a; --fault-ink:#fab219;
+    --good-ink:#0ca30c; --warn-ink:#fab219; --crit-ink:#f08a8a; --focus:#86b6ef;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7; --muted:#a3a297;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --allowed:#3987e5; --denied:#d95926; --fault:#c98500; --azure:#199e70;
+  --allowed-ink:#5c9df0; --denied-ink:#ec835a; --fault-ink:#fab219;
+  --good-ink:#0ca30c; --warn-ink:#fab219; --crit-ink:#f08a8a; --focus:#86b6ef;
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--page); color:var(--ink);
+  font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+.num, time, td.n { font-variant-numeric: tabular-nums; }
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.skip { position:absolute; left:-999px; }
+.skip:focus { left:8px; top:8px; background:var(--surface); padding:8px 12px; z-index:10; }
+:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+svg.i { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.75;
+  stroke-linecap:round; stroke-linejoin:round; flex:none; }
+header { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; padding:12px 16px;
+  border-bottom:1px solid var(--border); background:var(--surface); }
+header h1 { font-size:16px; margin:0; font-weight:650; }
+.chip { display:inline-flex; gap:6px; align-items:center; padding:2px 10px; border-radius:999px;
+  border:1px solid var(--border); font-size:12px; color:var(--ink-2); }
+.state { display:inline-flex; gap:6px; align-items:center; font-weight:650; color:var(--ink); }
+.state[data-s="LIVE"] { color:var(--good-ink); } .state[data-s="STALE"], .state[data-s="PAUSED"] { color:var(--warn-ink); }
+.state[data-s="DISCONNECTED"] { color:var(--crit-ink); }
+.spacer { flex:1; }
+main { max-width:1440px; margin:0 auto; padding:16px; display:grid; gap:16px;
+  grid-template-columns:repeat(12,1fr); }
+main > section { background:var(--surface); border:1px solid var(--border); border-radius:8px;
+  padding:12px 16px; min-width:0; }
+h2 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-2);
+  margin:0 0 8px; font-weight:650; }
+#stepper, #controls, #kpis { grid-column:1/-1; }
+#feeds { grid-column:span 5; } #charts { grid-column:span 7; }
+#alerts { grid-column:span 4; } #recon { grid-column:span 4; } #narration { grid-column:span 4; }
+@media (max-width:1100px) {
+  #feeds,#charts,#alerts,#recon,#narration { grid-column:1/-1; }
+  #stepper { order:-3; } #controls { order:-2; } #alerts { order:-1; }  /* alerts first after the controls */
+}
+ol.steps { list-style:none; display:flex; flex-wrap:wrap; gap:8px; margin:0; padding:0; }
+ol.steps li { position:relative; overflow:hidden; display:flex; gap:6px; align-items:center;
+  padding:6px 12px; border:1px solid var(--border); border-radius:6px; color:var(--ink-2);
+  min-height:36px; }
+ol.steps li.active { color:var(--ink); border-color:var(--ink-2); font-weight:650; }
+ol.steps li.done { color:var(--ink); }
+ol.steps li .bar { position:absolute; left:0; bottom:0; height:3px; background:var(--allowed);
+  transition:width .25s linear; }
+.row-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+button, select { font:inherit; color:var(--ink); background:var(--surface); border:1px solid var(--axis);
+  border-radius:6px; padding:0 12px; min-height:44px; cursor:pointer; display:inline-flex;
+  gap:6px; align-items:center; }
+button.primary { background:var(--ink); color:var(--surface); border-color:var(--ink); }
+button:disabled, select:disabled { opacity:.45; cursor:not-allowed; }
+button[aria-pressed="true"] { border-color:var(--fault); box-shadow:inset 0 0 0 1px var(--fault); }
+input[type=range] { flex:1 1 240px; min-height:44px; }
+#kpis { display:grid; gap:12px; grid-template-columns:repeat(4,1fr); background:none;
+  border:none; padding:0; }
+@media (max-width:900px) { #kpis { grid-template-columns:repeat(2,1fr); } }
+.tile { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; }
+.tile .label { color:var(--ink-2); font-size:12px; }
+.tile .value { font-size:28px; font-weight:650; line-height:1.2; }
+.tile .status { display:flex; gap:6px; align-items:center; font-size:12px; margin-top:4px; }
+.meter { height:6px; border-radius:3px; background:var(--grid); margin-top:8px; overflow:hidden; }
+.meter span { display:block; height:100%; background:var(--good); }
+.tile.warn .meter span { background:var(--warning); } .tile.crit .meter span { background:var(--critical); }
+.tile.good .status { color:var(--good-ink); } .tile.warn .status { color:var(--warn-ink); }
+.tile.crit .status { color:var(--crit-ink); }
+.feeds { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+@media (max-width:700px) { .feeds { grid-template-columns:1fr; } }
+ol.feed { list-style:none; margin:0; padding:0; max-height:340px; overflow:auto; font-size:12px; }
+ol.feed li { display:grid; grid-template-columns:44px 84px 1fr; gap:6px; padding:3px 0;
+  border-bottom:1px solid var(--grid); align-items:baseline; }
+ol.feed .detail { color:var(--ink-2); grid-column:2/-1; }
+.badge { display:inline-flex; gap:4px; align-items:center; font-weight:600; }
+.b-allowed { color:var(--allowed-ink); } .b-denied { color:var(--denied-ink); }
+.b-error { color:var(--crit-ink); } .tag-fault { color:var(--fault-ink); font-weight:600; }
+.note { color:var(--ink-2); font-size:12px; margin:0 0 6px; }
+.charts canvas { width:100%; }
+.chartbox { position:relative; height:240px; margin-bottom:8px; }
+details summary { cursor:pointer; color:var(--ink-2); min-height:44px; display:flex; align-items:center; }
+table { border-collapse:collapse; width:100%; font-size:12px; }
+th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--grid); }
+td.n, th.n { text-align:right; }
+.alertrow { display:flex; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid var(--grid); flex-wrap:wrap; }
+.astate { display:inline-flex; gap:6px; align-items:center; font-weight:650; min-width:110px; }
+.astate.Fired { color:var(--crit-ink); } .astate.Resolved { color:var(--good-ink); }
+.astate.Evaluating { color:var(--warn-ink); } .astate.OK { color:var(--ink-2); }
+td .astate { min-width:0; } .tablewrap { overflow-x:auto; }
+pre { background:var(--page); border:1px solid var(--border); border-radius:6px; padding:8px;
+  overflow:auto; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; margin:6px 0; }
+ol.how { padding-left:18px; margin:0 0 8px; } ol.how li { margin-bottom:4px; }
+a.link { color:var(--ink); } a[aria-disabled="true"] { color:var(--muted); text-decoration:none; }
+.links { display:flex; gap:12px; flex-wrap:wrap; margin-top:6px; }
+[hidden] { display:none !important; }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-wait" viewBox="0 0 24 24"><path d="M5 22h14M5 2h14M17 22v-4.2a2 2 0 0 0-.6-1.4L12 12l-4.4 4.4A2 2 0 0 0 7 17.8V22M7 2v4.2a2 2 0 0 0 .6 1.4L12 12l4.4-4.4A2 2 0 0 0 17 6.2V2"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></symbol>
+  <symbol id="i-theme" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+</svg>
+
+<header>
+  <h1>Solvent mission control</h1>
+  <span class="chip" id="env">dev</span>
+  <span class="state" id="state" data-s="IDLE"></span>
+  <span class="chip" id="profile"></span>
+  <span class="chip num" id="clock">T+00:00</span>
+  <span class="spacer"></span>
+  <button id="theme" type="button" aria-label="Switch theme"><svg class="i" aria-hidden="true"><use href="#i-theme"/></svg>Theme</button>
+</header>
+
+<main id="main">
+  <section id="stepper" aria-label="Scenario phases"><h2>Scenario</h2><ol class="steps" id="steps"></ol></section>
+
+  <section id="controls" aria-label="Controls">
+    <div class="row-controls" id="live-controls">
+      <button id="b-start" class="primary" type="button"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg>Start</button>
+      <button id="b-pause" type="button"><svg class="i" aria-hidden="true"><use href="#i-pause"/></svg><span>Pause</span></button>
+      <button id="b-next" type="button"><svg class="i" aria-hidden="true"><use href="#i-next"/></svg>Next phase</button>
+      <label class="sr-only" for="fault-ms">Latency to inject</label>
+      <select id="fault-ms"><option value="1000">+1 s</option><option value="3000" selected>+3 s</option><option value="5000">+5 s</option></select>
+      <button id="b-fault" type="button" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-zap"/></svg>Inject latency</button>
+      <button id="b-stop" type="button"><svg class="i" aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>
+    </div>
+    <div class="row-controls" id="replay-controls" hidden>
+      <button id="r-play" class="primary" type="button"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg><span>Play</span></button>
+      <label class="sr-only" for="r-speed">Replay speed</label>
+      <select id="r-speed"><option value="1">1x</option><option value="10" selected>10x</option><option value="60">60x</option><option value="300">300x</option></select>
+      <label class="sr-only" for="r-scrub">Replay position</label>
+      <input id="r-scrub" type="range" min="0" max="1000" value="0">
+      <button id="r-end" type="button"><svg class="i" aria-hidden="true"><use href="#i-next"/></svg>Skip to end</button>
+    </div>
+  </section>
+
+  <section id="kpis" aria-label="Key numbers"></section>
+
+  <section id="feeds">
+    <h2>Calls</h2>
+    <p class="note" id="feed-note"></p>
+    <div class="feeds">
+      <div><h3 class="note">What the agents saw</h3><ol class="feed" id="feed-client" aria-label="Agent calls, newest first"></ol></div>
+      <div><h3 class="note">What the server recorded</h3><ol class="feed" id="feed-server" aria-label="Server audit lines, newest first"></ol></div>
+    </div>
+  </section>
+
+  <section id="charts" class="charts">
+    <h2>Calls per minute</h2>
+    <div class="chartbox"><canvas id="c1" role="img" aria-label="Calls per minute"></canvas></div>
+    <h2>Latency against the 2 s objective</h2>
+    <p class="note">Dots and the solid line are client round trips (instant). The dashed line is what Azure has ingested (minutes behind, server side).</p>
+    <div class="chartbox"><canvas id="c2" role="img" aria-label="Latency"></canvas></div>
+    <details id="table-view"><summary>Table view</summary>
+      <div class="tablewrap"><table><thead><tr><th>Minute</th><th class="n">Allowed</th><th class="n">Denied</th><th class="n">p95 client</th><th class="n">p95 Azure</th></tr></thead><tbody id="tbody"></tbody></table></div>
+    </details>
+  </section>
+
+  <section id="alerts"><h2>Alerts</h2><div id="alert-rows"></div><p class="note" id="alert-note"></p></section>
+  <section id="recon"><h2>Did every call get recorded?</h2><div id="recon-body"></div><p class="note" id="recon-note"></p></section>
+  <section id="narration"><h2>What to look at now</h2><div id="narr"></div><div class="links" id="links"></div></section>
+</main>
+
+<div class="sr-only" id="say" aria-live="polite"></div>
+<noscript><p>This page needs JavaScript.</p></noscript>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+window.__T = "__TOKEN__";
+window.__EVENTS__ = /*__EVENTS__*/null;
+</script>
+<script>
+(() => {
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const icon = (n) => `<svg class="i" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+const REPLAY = Array.isArray(window.__EVENTS__);
+const SLO_MS = 2000, THRESHOLD = 5, FEED_MAX = 200, STALE_MS = 15000;
+const fmtT = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+const fmtMs = (v) => v == null ? '–' : (v >= 1000 ? (v / 1000).toFixed(2) + ' s' : Math.round(v) + ' ms');
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const NARR = {
+  baseline: { steps: ['Normal has a shape: a steady line of allowed calls, one or two refusals every few minutes.', 'The gate is microseconds; latency here is Azure answering the health read.', 'Note the p95 and the denials-per-5-minutes: the two alerts watch these.'],
+    kql: 'AppTraces\n| where TimeGenerated > ago(30m) and isnotempty(Properties.decision)\n| summarize calls = count() by bin(TimeGenerated, 1m), decision = tostring(Properties.decision)\n| render timechart' },
+  runaway: { steps: ['Symptom (metrics): denials per minute jump; the denial tile climbs past 5.', 'Who (logs): group refusals by reason and caller; one caller, one tool, one reason.', 'Fix: stop the agent. Azure fires the alert minutes later; that lag is the lesson.'],
+    kql: 'AppTraces\n| where TimeGenerated > ago(30m) and tostring(Properties.decision) == "denied"\n| summarize denials = count() by reason = tostring(Properties.reason), tool = tostring(Properties.tool), caller = tostring(Properties.caller)\n| order by denials desc' },
+  quiet: { steps: ['Traffic is back to baseline; denials fall.', 'The alert stays Fired until its five-minute window drains.'],
+    kql: 'AppTraces\n| where TimeGenerated > ago(30m) and isnotempty(Properties.decision)\n| summarize calls = count() by bin(TimeGenerated, 1m), decision = tostring(Properties.decision)\n| render timechart' },
+  slow: { steps: ['Symptom (metrics): the p95 line crosses the 2 s objective.', 'Where (logs): compare latency_ms to gate_ms. gate_ms stays flat, so the delay is upstream of the policy layer.', 'The audit line also says fault_ms: an injected delay is never mistaken for a real one.'],
+    kql: 'AppTraces\n| where TimeGenerated > ago(30m) and tostring(Properties.decision) == "allowed"\n| extend latency_ms = todouble(Properties.latency_ms), gate_ms = todouble(Properties.gate_ms)\n| summarize p95_latency = percentile(latency_ms, 95), p95_gate = percentile(gate_ms, 95) by bin(TimeGenerated, 1m)\n| render timechart' },
+  recovery: { steps: ['Latency returns to normal as soon as the fault is off.', 'The alert does not resolve yet: it reads a 15-minute window, so it keeps firing after the fix. Window length is time-to-resolve.', 'This is the series the latency alert reads.'],
+    kql: 'AppMetrics\n| where Name == "mcp.tool.latency_ms" and TimeGenerated > ago(45m)\n| summarize p95_of_max = percentile(Max, 95) by bin(TimeGenerated, 1m)\n| render timechart' },
+};
+
+let S;
+function reset() {
+  S = { t0: null, now: 0, state: 'IDLE', profile: '', step: false, phases: [], phaseIdx: -1,
+    trafficDone: null, calls: [], feed: { client: [], server: [] }, azure: { rows: [], until: null },
+    alerts: {}, recon: null, kpi: null, p95: [], unavailable: {}, ctx: null, lastAt: 0,
+    faultAsked: 0, conn: true, project: 'solventdev', say: [] };
+}
+reset();
+const say = (m) => S.say.push(m);
+const nowMs = () => REPLAY ? S.now : (S.state === 'LIVE' ? Date.now() : S.now);
+const push = (arr, x) => { arr.push(x); if (arr.length > FEED_MAX) arr.shift(); };
+
+function apply(ev) {
+  if (ev.t && S.t0 == null) S.t0 = ev.t;
+  S.now = Math.max(S.now, ev.t || 0);
+  S.lastAt = REPLAY ? S.now : Date.now();
+  const k = ev.kind;
+  switch (ev.lane) {
+    case 'control':
+      if (k === 'start') { S.state = 'LIVE'; S.t0 = ev.t; S.profile = ev.profile; S.step = ev.step; S.project = ev.project || S.project;
+        S.phases = ev.phases.map((p) => ({ ...p, start: null, end: null })); }
+      else if (k === 'pause') S.state = 'PAUSED';
+      else if (k === 'resume') S.state = 'LIVE';
+      else if (k === 'fault') S.faultAsked = ev.ms;
+      else if (k === 'end') S.state = 'ENDED';
+      break;
+    case 'phase':
+      if (k === 'start') { S.phaseIdx = ev.index; if (S.phases[ev.index]) S.phases[ev.index].start = ev.t; say(`Phase ${ev.index + 1} of ${ev.of}: ${ev.title}`); }
+      else if (k === 'end') { const p = S.phases.find((x) => x.key === ev.key); if (p) p.end = ev.t; }
+      else if (k === 'traffic_done') { S.trafficDone = ev.t; say('Traffic finished. Still watching Azure.'); }
+      break;
+    case 'client': if (!ev.warmup) { S.calls.push(ev); push(S.feed.client, ev); } break;
+    case 'server': push(S.feed.server, ev); break;
+    case 'azure': if (k === 'series') S.azure = { rows: ev.rows, until: ev.data_until }; break;
+    case 'alert': if (!S.alerts[ev.rule] || S.alerts[ev.rule].state !== ev.state) say(`Alert ${ev.rule.replace(/^.*-(?=[a-z]+-[a-z]+$)/, '')} ${ev.state}`); S.alerts[ev.rule] = ev; break;
+    case 'kpi': S.kpi = ev; if (ev.p95_ms != null) S.p95.push({ t: ev.t, v: ev.p95_ms }); break;
+    case 'recon': S.recon = ev.rows; break;
+    case 'sys':
+      if (k === 'lane_unavailable') S.unavailable[ev.name] = ev.reason;
+      else if (k === 'azure_context') S.ctx = ev;
+      break;
+  }
+}
+
+/* ---------- rendering ---------- */
+function stateLabel() {
+  if (!S.conn && !REPLAY) return 'DISCONNECTED';
+  if (REPLAY) return 'REPLAY';
+  if (S.state === 'LIVE' && Date.now() - S.lastAt > STALE_MS) return 'STALE';
+  return S.state;
+}
+const STATE_ICON = { LIVE: 'ok', PAUSED: 'pause', STALE: 'wait', REPLAY: 'play', IDLE: 'wait', ENDED: 'check', DISCONNECTED: 'x' };
+
+function renderHeader() {
+  const s = stateLabel(), el = $('#state');
+  el.dataset.s = s; el.innerHTML = icon(STATE_ICON[s]) + ' ' + s;
+  $('#profile').textContent = S.profile ? `${S.profile} profile${S.step ? ', step mode' : ''}` : 'not started';
+  $('#clock').textContent = 'T+' + fmtT(S.t0 ? nowMs() - S.t0 : 0);
+}
+
+function renderStepper() {
+  $('#steps').innerHTML = S.phases.map((p, i) => {
+    const cls = p.end ? 'done' : (p.start != null ? 'active' : 'todo');
+    const pct = p.start != null && !p.end && !S.step ? Math.min(100, (nowMs() - p.start) / (p.minutes * 600)) : 0;
+    const ic = cls === 'done' ? icon('check') : '';
+    return `<li class="${cls}"${cls === 'active' ? ' aria-current="step"' : ''}>${ic}<span>${i + 1}. ${esc(p.title)}</span><span class="note num">${p.minutes} min</span>${pct ? `<span class="bar" style="width:${pct}%"></span>` : ''}</li>`;
+  }).join('');
+}
+
+function renderControls() {
+  const on = S.state === 'LIVE' || S.state === 'PAUSED';
+  $('#b-start').disabled = S.state !== 'IDLE';
+  $('#b-pause').disabled = !on; $('#b-next').disabled = !on; $('#b-stop').disabled = !on;
+  $('#fault-ms').disabled = !on; $('#b-fault').disabled = !on;
+  $('#b-pause span').textContent = S.state === 'PAUSED' ? 'Resume' : 'Pause';
+  $('#b-fault').setAttribute('aria-pressed', S.faultAsked > 0 ? 'true' : 'false');
+}
+
+function tile(label, value, status, cls, pct, hint) {
+  const ic = cls === 'crit' ? 'alert' : cls === 'warn' ? 'wait' : 'ok';
+  return `<div class="tile ${cls}"><div class="label">${label}</div><div class="value num">${value}</div>` +
+    `<div class="status">${icon(ic)}<span>${status}</span></div>` +
+    (pct != null ? `<div class="meter" role="img" aria-label="${label}: ${esc(status)}"><span style="width:${Math.max(0, Math.min(100, pct))}%"></span></div>` : '') +
+    (hint ? `<div class="note">${hint}</div>` : '') + '</div>';
+}
+function renderKpis() {
+  const k = S.kpi || { calls_1m: 0, p95_ms: null, denied_5m: 0, budget_left_pct: 100 };
+  const d = k.denied_5m, dcls = d > THRESHOLD ? 'crit' : d >= 4 ? 'warn' : 'good';
+  const p = k.p95_ms, pcls = p == null ? 'good' : p > SLO_MS ? 'crit' : p > SLO_MS * 0.75 ? 'warn' : 'good';
+  const b = k.budget_left_pct, bcls = b <= 0 ? 'crit' : b < 25 ? 'warn' : 'good';
+  $('#kpis').innerHTML =
+    tile('Calls in the last minute', k.calls_1m, 'Agents, all lanes', 'good', null) +
+    tile('Denials in 5 minutes', `${d} <span class="note">of ${THRESHOLD}</span>`, d > THRESHOLD ? 'Over the alert threshold' : d >= 4 ? 'Near the threshold' : 'Normal', dcls, (d / THRESHOLD) * 100, 'Alert fires above 5') +
+    tile('p95 latency (client)', fmtMs(p), p == null ? 'No data yet' : p > SLO_MS ? 'Over the 2 s objective' : 'Within the objective', pcls, p == null ? 0 : (p / (SLO_MS * 1.5)) * 100, 'Client round trip, last minute') +
+    tile('Error budget left', b + '%', b <= 0 ? 'Exhausted' : b < 25 ? 'Low' : 'Healthy', bcls, b, '99% of calls within 2 s, client measured');
+}
+
+const label = { allowed: 'Allowed', denied: 'Denied', error: 'Error' };
+function renderFeeds() {
+  const c = S.feed.client.slice().reverse().map((e) => {
+    const fault = e.fault_asked_ms && e.outcome === 'allowed' ? ` <span class="tag-fault">${icon('zap')}+${e.fault_asked_ms} ms fault</span>` : '';
+    return `<li><time>${fmtT(e.t - S.t0)}</time><span class="badge b-${e.outcome}">${icon(e.outcome === 'allowed' ? 'ok' : e.outcome === 'denied' ? 'x' : 'alert')}${label[e.outcome]}</span><span>${esc(e.agent)} · ${esc(e.tool)}</span><span class="detail num">${esc(e.reason)} · ${fmtMs(e.rtt_ms)}${fault}</span></li>`;
+  }).join('');
+  const s = S.feed.server.slice().reverse().map((e) => {
+    const fault = e.fault_ms ? ` <span class="tag-fault">${icon('zap')}fault ${e.fault_ms} ms</span>` : '';
+    const gate = e.gate_ms != null ? ` · gate ${Number(e.gate_ms).toFixed(2)} ms` : '';
+    return `<li><time>${fmtT(e.t - S.t0)}</time><span class="badge b-${e.decision}">${icon(e.decision === 'allowed' ? 'ok' : 'x')}${label[e.decision] || esc(e.decision)}</span><span>${esc(e.caller || 'anonymous')} · ${esc(e.tool)}</span><span class="detail num">${esc(e.reason)} · ${fmtMs(e.latency_ms)}${gate}${fault}</span></li>`;
+  }).join('');
+  $('#feed-client').innerHTML = c || '<li><span class="note">No calls yet.</span></li>';
+  $('#feed-server').innerHTML = s || `<li><span class="note">${S.unavailable.server ? 'Unavailable: ' + esc(S.unavailable.server) : 'Nothing recorded yet.'}</span></li>`;
+  $('#feed-note').textContent = S.unavailable.server ? '' : 'The server lane trails the agents by a few seconds.';
+}
+
+/* charts */
+let c1, c2;
+const fontFamily = 'system-ui,-apple-system,"Segoe UI",sans-serif';
+const bands = { id: 'bands', beforeDatasetsDraw(chart, _a, opts) {
+  if (S.t0 == null) return;
+  const { ctx, chartArea: { top, bottom }, scales: { x } } = chart;
+  const pos = (ms) => opts.unit === 'min' ? (ms - S.t0) / 60000 - 0.5 : (ms - S.t0) / 1000;
+  ctx.save();
+  S.phases.forEach((p) => {
+    if (p.start == null) return;
+    const x0 = x.getPixelForValue(pos(p.start)), x1 = x.getPixelForValue(pos(p.end ?? nowMs()));
+    const tint = p.key === 'runaway' ? css('--denied') : p.key === 'slow' ? css('--fault') : null;
+    if (tint) { ctx.globalAlpha = 0.12; ctx.fillStyle = tint; ctx.fillRect(x0, top, Math.max(0, x1 - x0), bottom - top); }
+    ctx.globalAlpha = 1; ctx.strokeStyle = css('--axis'); ctx.beginPath(); ctx.moveTo(x0, top); ctx.lineTo(x0, bottom); ctx.stroke();
+    ctx.fillStyle = css('--ink-2'); ctx.font = `11px ${fontFamily}`;
+    if (x1 - x0 > ctx.measureText(p.title).width + 8) ctx.fillText(p.title, x0 + 4, top + 12);  // skip labels that do not fit
+  });
+  ctx.restore();
+} };
+function initCharts() {
+  if (typeof Chart === 'undefined') return;
+  Chart.defaults.font.family = fontFamily; Chart.defaults.animation = false;
+  Chart.register(bands);
+  const common = { responsive: true, maintainAspectRatio: false, interaction: { mode: 'nearest', intersect: true } };
+  c1 = new Chart($('#c1'), { type: 'bar',
+    data: { labels: [], datasets: [{ label: 'Allowed', data: [], stack: 's' }, { label: 'Denied', data: [], stack: 's' }] },
+    options: { ...common, plugins: { bands: { unit: 'min' }, legend: { labels: { usePointStyle: true } } },
+      scales: { x: { stacked: true, title: { display: true, text: 'Minute of the run' } }, y: { stacked: true, beginAtZero: true, grace: '15%', title: { display: true, text: 'Calls' } } } } });
+  c2 = new Chart($('#c2'), { type: 'scatter',
+    data: { datasets: [
+      { label: 'Agent round trip (allowed)', data: [], pointRadius: 2, showLine: false },
+      { label: 'With fault injected', data: [], pointRadius: 5, pointStyle: 'triangle', showLine: false },
+      { label: 'p95 client', data: [], showLine: true, pointRadius: 0, borderWidth: 2, pointStyle: 'line' },
+      { label: 'p95 Azure (server side)', data: [], showLine: true, pointRadius: 0, borderWidth: 2, borderDash: [6, 4], pointStyle: 'line' },
+      { label: '2 s objective', data: [], showLine: true, pointRadius: 0, borderWidth: 1, borderDash: [2, 3], pointStyle: 'line' }] },
+    options: { ...common, plugins: { bands: { unit: 'sec' }, legend: { labels: { usePointStyle: true } },
+      tooltip: { callbacks: { label: (i) => `${i.dataset.label}: ${fmtMs(i.parsed.y)} at T+${fmtT(i.parsed.x * 1000)}` } } },
+      scales: { x: { type: 'linear', title: { display: true, text: 'Time into the run' }, ticks: { callback: (v) => fmtT(v * 1000) } },
+        y: { beginAtZero: true, suggestedMax: 2500, grace: '25%', title: { display: true, text: 'Milliseconds' } } } } });
+}
+function paintChart(ch) {
+  const o = ch.options.scales;
+  Object.values(o).forEach((a) => { a.ticks = { ...(a.ticks || {}), color: css('--ink-2') }; a.grid = { color: css('--grid') }; a.border = { color: css('--axis') }; if (a.title) a.title.color = css('--ink-2'); });
+  ch.options.plugins.legend.labels.color = css('--ink');
+}
+function renderCharts() {
+  if (!c1 || S.t0 == null) return;
+  const secs = (t) => (t - S.t0) / 1000;
+  const mins = Math.max(1, Math.ceil((nowMs() - S.t0) / 60000) + 1);
+  const allowed = new Array(mins).fill(0), denied = new Array(mins).fill(0);
+  S.calls.forEach((e) => { const m = Math.floor((e.t - S.t0) / 60000); if (m >= 0 && m < mins) (e.outcome === 'allowed' ? allowed : denied)[m]++; });
+  c1.data.labels = allowed.map((_, i) => i);
+  c1.data.datasets[0].data = allowed; c1.data.datasets[1].data = denied;
+  c1.data.datasets[0].backgroundColor = css('--allowed'); c1.data.datasets[1].backgroundColor = css('--denied');
+  const ok = S.calls.filter((e) => e.outcome === 'allowed');
+  const maxX = Math.max(60, secs(nowMs()));
+  const d = c2.data.datasets;
+  d[0].data = ok.filter((e) => !e.fault_asked_ms).map((e) => ({ x: secs(e.t), y: e.rtt_ms }));
+  d[1].data = ok.filter((e) => e.fault_asked_ms).map((e) => ({ x: secs(e.t), y: e.rtt_ms }));
+  d[2].data = S.p95.map((p) => ({ x: secs(p.t), y: p.v }));
+  d[3].data = S.azure.rows.filter((r) => r.decision === 'allowed' && r.p95 != null)
+    .map((r) => ({ x: (Date.parse(r.minute) - S.t0) / 1000 + 30, y: r.p95 })).sort((a, b) => a.x - b.x);
+  d[4].data = [{ x: 0, y: SLO_MS }, { x: maxX, y: SLO_MS }];
+  d[0].backgroundColor = d[0].borderColor = css('--allowed');
+  d[1].backgroundColor = d[1].borderColor = css('--fault');
+  d[2].borderColor = css('--allowed'); d[3].borderColor = css('--azure'); d[4].borderColor = css('--ink-2');
+  c2.options.scales.x.max = maxX;
+  paintChart(c1); paintChart(c2); c1.update('none'); c2.update('none');
+  const last = allowed.length - 1;
+  $('#c1').setAttribute('aria-label', `Calls per minute. Latest minute: ${allowed[last] || 0} allowed, ${denied[last] || 0} denied.`);
+  $('#c2').setAttribute('aria-label', `Latency. Client p95 now ${fmtMs(S.kpi && S.kpi.p95_ms)}. The objective is 2 seconds.`);
+  if ($('#table-view').open) {
+    const az = {}; S.azure.rows.forEach((r) => { if (r.decision === 'allowed') az[Math.round((Date.parse(r.minute) - S.t0) / 60000)] = r.p95; });
+    $('#tbody').innerHTML = allowed.map((a, i) => {
+      const inMin = ok.filter((e) => Math.floor((e.t - S.t0) / 60000) === i).map((e) => e.rtt_ms).sort((x, y) => x - y);
+      const p = inMin.length ? inMin[Math.max(0, Math.ceil(0.95 * inMin.length) - 1)] : null;
+      return `<tr><td>${i}</td><td class="n">${a}</td><td class="n">${denied[i]}</td><td class="n">${fmtMs(p)}</td><td class="n">${fmtMs(az[i])}</td></tr>`;
+    }).join('');
+  }
+}
+
+const RULES = [['denied-writes', 'Denial burst', 'runaway'], ['latency-slo', 'Latency objective', 'slow']];
+function renderAlerts() {
+  $('#alert-rows').innerHTML = RULES.map(([suffix, name, phaseKey]) => {
+    const a = S.alerts[`${S.project}-${suffix}`], cause = S.phases.find((p) => p.key === phaseKey);
+    let st = 'OK', when = '';
+    if (a && a.state === 'Fired') { st = 'Fired'; }
+    else if (a && a.state === 'Resolved') { st = 'Resolved'; }
+    else if (cause && cause.start != null) st = 'Evaluating';
+    if (a && a.fired && cause && cause.start != null) when = `fired ${fmtT(Date.parse(a.fired) - cause.start)} after the cause`;
+    if (a && a.state === 'Resolved' && a.resolved) when += `, resolved ${fmtT(Date.parse(a.resolved) - Date.parse(a.fired))} later`;
+    const ic = { OK: 'ok', Evaluating: 'wait', Fired: 'alert', Resolved: 'check' }[st];
+    return `<div class="alertrow"><span class="astate ${st}">${icon(ic)}${st}</span><strong>${name}</strong><span class="note">${esc(when)}</span></div>`;
+  }).join('');
+  $('#alert-note').textContent = S.unavailable.alerts ? 'Azure alerts unavailable: ' + S.unavailable.alerts : 'Alerts evaluate every 5 minutes and Azure ingests with a delay, so they trail the cause by minutes.';
+}
+
+function renderRecon() {
+  const r = S.recon;
+  const rows = r ? ['allowed', 'denied'].map((d) => {
+    const x = r[d], ic = { ok: 'check', pending: 'wait', unaccounted: 'alert' }[x.status];
+    return `<tr><td>${d}</td><td class="n">${x.client}</td><td class="n">${S.unavailable.server ? '–' : x.server}</td><td class="n">${x.azure}</td><td><span class="astate ${x.status === 'ok' ? 'Resolved' : x.status === 'pending' ? 'Evaluating' : 'Fired'}">${icon(ic)}${x.status}</span></td></tr>`;
+  }).join('') : '';
+  $('#recon-body').innerHTML = `<div class="tablewrap"><table><thead><tr><th>Decision</th><th class="n">Agents sent</th><th class="n">Server logged</th><th class="n">Azure has</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  let note = 'Azure has no data yet.';
+  if (S.azure.until) note = `Azure has data up to ${new Date(Date.parse(S.azure.until)).toISOString().slice(11, 16)}Z, about ${fmtT(Math.max(0, (nowMs() - Date.parse(S.azure.until) - 60000)))} behind.`;
+  if (S.unavailable.azure) note = 'Azure unavailable: ' + S.unavailable.azure;
+  $('#recon-note').textContent = note;
+}
+
+let narrKey = null;
+function renderNarration() {
+  const p = S.phases[S.phaseIdx], key = p ? p.key : null;
+  if (key !== narrKey) {
+    narrKey = key;
+    const n = NARR[key];
+    $('#narr').innerHTML = n ? `<ol class="how">${n.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol><pre id="kql">${esc(n.kql)}</pre><button type="button" id="copy">${icon('copy')}Copy query</button>`
+      : '<p class="note">Press Start to begin. Each phase says what to look at.</p>';
+    const b = $('#copy'); if (b) b.onclick = () => { try { navigator.clipboard.writeText(n.kql); say('Query copied'); } catch (_) { const r = document.createRange(); r.selectNodeContents($('#kql')); getSelection().removeAllRanges(); getSelection().addRange(r); } };
+  }
+  const c = S.ctx, base = 'https://portal.azure.com/#';
+  const link = (text, href) => href ? `<a class="link" target="_blank" rel="noopener" href="${href}">${text}</a>` : `<a class="link" aria-disabled="true" title="Available in a live run">${text}</a>`;
+  const rid = (prov) => c && c.sub ? `${base}resource/subscriptions/${c.sub}/resourceGroups/${c.rg}/providers/${prov}` : '';
+  $('#links').innerHTML = link('Workbook', rid(`microsoft.insights/components/${c ? c.appi : ''}/workbooks`)) +
+    link('Alerts', c && c.sub ? `${base}view/Microsoft_Azure_Monitoring/AlertsManagementSummaryBlade` : '') +
+    link('Logs', rid(`Microsoft.OperationalInsights/workspaces/${c ? c.law : ''}/logs`));
+}
+
+function render() {
+  renderHeader(); renderStepper(); renderControls(); renderKpis(); renderFeeds();
+  renderCharts(); renderAlerts(); renderRecon(); renderNarration();
+  if (S.say.length) { $('#say').textContent = S.say.splice(0).join('. '); }
+}
+let queued = false;
+const schedule = () => { if (!queued) { queued = true; setTimeout(() => { queued = false; render(); }, 250); } };
+
+/* ---------- theme ---------- */
+const root = document.documentElement;
+try { const t = localStorage.getItem('theme'); if (t) root.dataset.theme = t; } catch (_) {}
+$('#theme').onclick = () => {
+  const dark = (root.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) === 'dark';
+  root.dataset.theme = dark ? 'light' : 'dark';
+  try { localStorage.setItem('theme', root.dataset.theme); } catch (_) {}
+  schedule();
+};
+
+/* ---------- live ---------- */
+const post = (action, extra) => fetch('/control', { method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-demo-token': window.__T },
+  body: JSON.stringify({ action, ...extra }) }).catch(() => { S.conn = false; schedule(); });
+
+function startLive() {
+  $('#b-start').onclick = () => post('start');
+  $('#b-pause').onclick = () => post(S.state === 'PAUSED' ? 'resume' : 'pause');
+  $('#b-next').onclick = () => post('next');
+  $('#b-stop').onclick = () => post('stop');
+  $('#b-fault').onclick = () => post('fault', { ms: S.faultAsked > 0 ? 0 : Number($('#fault-ms').value) });
+  const es = new EventSource('/events');
+  es.onopen = () => { reset(); narrKey = null; S.conn = true; schedule(); };  // the server replays its buffer
+  es.onmessage = (m) => { apply(JSON.parse(m.data)); schedule(); };
+  es.onerror = () => { S.conn = false; schedule(); };
+  setInterval(render, 1000);
+}
+
+/* ---------- replay ---------- */
+function startReplay() {
+  $('#live-controls').hidden = true; $('#replay-controls').hidden = false;
+  const EV = window.__EVENTS__.slice().sort((a, b) => a.t - b.t);
+  const first = EV.length ? EV[0].t : 0, span = EV.length ? EV[EV.length - 1].t - first : 0;
+  let pos = 0, vt = 0, playing = false, last = 0;
+  const seek = (to) => {
+    if (to < vt || to === 0) { reset(); narrKey = null; pos = 0; }
+    vt = to;
+    const lim = first + vt;
+    while (pos < EV.length && EV[pos].t <= lim) apply(EV[pos++]);
+    S.now = lim;
+    $('#r-scrub').value = span ? Math.round((vt / span) * 1000) : 0;
+  };
+  const setPlaying = (p) => { playing = p; last = performance.now(); $('#r-play span').textContent = p ? 'Pause' : 'Play'; };
+  $('#r-play').onclick = () => setPlaying(!playing);
+  $('#r-end').onclick = () => { setPlaying(false); seek(span); render(); };
+  $('#r-scrub').oninput = (e) => { setPlaying(false); seek((Number(e.target.value) / 1000) * span); render(); };
+  const frame = (ts) => {
+    if (playing) { const to = Math.min(span, vt + (ts - last) * Number($('#r-speed').value)); last = ts; seek(to); schedule(); if (to >= span) setPlaying(false); }
+    requestAnimationFrame(frame);
+  };
+  seek(0); render(); requestAnimationFrame(frame);
+}
+
+initCharts();
+if (REPLAY) startReplay(); else startLive();
+render();
+})();
+</script>
+</body>
+</html>

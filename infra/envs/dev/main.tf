@@ -39,4 +39,7 @@ module "solvent" {
   # dev pulls the identical image prod runs, out of prod's registry - the pipeline only ever
   # pushes one repository, "solvent", so dev must ask for that rather than "solventdev".
   image_repository = "solvent"
+  # The demo harness adds latency through a header the app only honours when this is set. The
+  # image is shared with prod, so prod gets the code but never the switch.
+  fault_injection = true
 }

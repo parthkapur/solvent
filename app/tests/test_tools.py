@@ -240,3 +240,44 @@ def test_shared_key_is_named_in_a_real_audit_line(monkeypatch, http, caplog):
     assert any(
         e["tool"] == "restart_container_app" and e["caller"] == "shared_key" for e in events
     )
+
+
+FAULT_BODY = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "get_resource_health", "arguments": {"resource_group": "rg"}},
+}
+
+
+def _last_audit(caplog):
+    return [json.loads(r.message) for r in caplog.records if r.name == "solvent.audit"][-1]
+
+
+def test_fault_header_reaches_the_audit_line(monkeypatch, caplog, http):
+    monkeypatch.setenv("FAULT_INJECTION", "1")
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    hdrs = {
+        "accept": "application/json, text/event-stream",
+        "authorization": "Bearer k3y",
+        "x-solvent-fault": "latency_ms=150",
+    }
+    with caplog.at_level(logging.INFO, logger="solvent.audit"):
+        r = http.post("/mcp", json=FAULT_BODY, headers=hdrs)
+    assert r.status_code == 200
+    ev = _last_audit(caplog)
+    assert (ev["tool"], ev["decision"], ev["fault_ms"]) == ("get_resource_health", "allowed", 150)
+    assert ev["latency_ms"] >= 150
+
+
+def test_fault_header_ignored_without_the_env_var(monkeypatch, caplog, http):
+    monkeypatch.delenv("FAULT_INJECTION", raising=False)
+    monkeypatch.setattr(server, "API_KEY", "k3y")
+    hdrs = {
+        "accept": "application/json, text/event-stream",
+        "authorization": "Bearer k3y",
+        "x-solvent-fault": "latency_ms=150",
+    }
+    with caplog.at_level(logging.INFO, logger="solvent.audit"):
+        assert http.post("/mcp", json=FAULT_BODY, headers=hdrs).status_code == 200
+    assert "fault_ms" not in _last_audit(caplog)

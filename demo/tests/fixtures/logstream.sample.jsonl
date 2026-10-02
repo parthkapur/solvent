@@ -1,0 +1,90 @@
+{"TimeStamp": "2026-09-30T15:07:43.42961", "Log": "Connecting to the container 'solventdev'..."}
+{"TimeStamp": "2026-09-30T15:07:43.45881", "Log": "Successfully Connected to container: 'solventdev' [Revision: 'solventdev-app--0000002', Replica: 'solventdev-app--0000002-64fdd89cd8-v5js8']"}
+{"TimeStamp": "2026-09-30T15:05:54.5071038+00:00", "Log": "F INFO:     Started server process [1]"}
+{"TimeStamp": "2026-09-30T15:05:54.5071406+00:00", "Log": "F INFO:     Waiting for application startup."}
+{"TimeStamp": "2026-09-30T15:05:54.5831382+00:00", "Log": "F INFO:mcp.server.streamable_http_manager:StreamableHTTP session manager started"}
+{"TimeStamp": "2026-09-30T15:05:54.5832551+00:00", "Log": "F INFO:     Application startup complete."}
+{"TimeStamp": "2026-09-30T15:05:54.5834956+00:00", "Log": "F INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)"}
+{"TimeStamp": "2026-09-30T15:05:55.7825209+00:00", "Log": "F INFO:     127.0.0.1:42856 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:06:00.2934681+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780760.293004, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:06:00.2935304+00:00", "Log": "F INFO:     100.100.0.213:33588 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:06:03.5681914+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780763.5677383, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:06:03.5682808+00:00", "Log": "F INFO:     100.100.0.64:36994 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:06:05.7820751+00:00", "Log": "F INFO:     127.0.0.1:47810 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:06:06.7238625+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780766.7234886, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:06:06.723985+00:00", "Log": "F INFO:     100.100.0.26:39048 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:06:15.7863778+00:00", "Log": "F INFO:     127.0.0.1:52488 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:06:25.7860182+00:00", "Log": "F INFO:     127.0.0.1:50824 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:06:35.7855493+00:00", "Log": "F INFO:     127.0.0.1:41306 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:06:45.7877119+00:00", "Log": "F INFO:     127.0.0.1:49710 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:06:55.785235+00:00", "Log": "F INFO:     127.0.0.1:37534 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:05.7812164+00:00", "Log": "F INFO:     127.0.0.1:54618 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:15.7831349+00:00", "Log": "F INFO:     127.0.0.1:38228 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:22.3948741+00:00", "Log": "F INFO:     100.100.0.26:37342 - \"GET / HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:25.7824683+00:00", "Log": "F INFO:     127.0.0.1:50564 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:35.7826782+00:00", "Log": "F INFO:     127.0.0.1:51468 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:40.4304614+00:00", "Log": "F INFO:     100.100.0.64:40146 - \"GET / HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:45.7823898+00:00", "Log": "F INFO:     127.0.0.1:35476 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:54.2013753+00:00", "Log": "F INFO:     100.100.0.64:59264 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:54.2712833+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780874.270882, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:07:54.2713619+00:00", "Log": "F INFO:     100.100.0.26:44838 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:07:55.78551+00:00", "Log": "F INFO:     127.0.0.1:57430 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:07:58.3960724+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780878.3955972, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:07:58.3961403+00:00", "Log": "F INFO:     100.100.0.64:44230 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:08:02.5593332+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780882.5589614, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:08:02.5595022+00:00", "Log": "F INFO:     100.100.0.26:55724 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:08:05.785855+00:00", "Log": "F INFO:     127.0.0.1:59744 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:08:15.784618+00:00", "Log": "F INFO:     127.0.0.1:52804 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:08:25.7876476+00:00", "Log": "F INFO:     127.0.0.1:39376 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:08:36.1477915+00:00", "Log": "F INFO:     127.0.0.1:47230 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:08:45.7852663+00:00", "Log": "F INFO:     127.0.0.1:60788 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:08:55.7880926+00:00", "Log": "F INFO:     127.0.0.1:39172 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:05.7871826+00:00", "Log": "F INFO:     127.0.0.1:52392 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:15.7857677+00:00", "Log": "F INFO:     127.0.0.1:41202 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:18.8398088+00:00", "Log": "F INFO:     100.100.0.26:35480 - \"GET / HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:25.785959+00:00", "Log": "F INFO:     127.0.0.1:49774 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:32.8748518+00:00", "Log": "F INFO:     100.100.0.64:48668 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:32.9557836+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780972.9553754, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:09:32.9558929+00:00", "Log": "F INFO:     100.100.0.64:48668 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:09:35.7852508+00:00", "Log": "F INFO:     127.0.0.1:54180 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:37.0446074+00:00", "Log": "F INFO:     100.100.0.64:49038 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:09:37.0446074+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780977.043998, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:09:41.1458854+00:00", "Log": "F INFO:solvent.audit:{\"ts\": 1790780981.1455278, \"caller\": \"\", \"tool\": \"mcp\", \"decision\": \"denied\", \"reason\": \"unauthenticated\", \"trace_id\": \"00000000000000000000000000000000\", \"span_id\": \"0000000000000000\"}"}
+{"TimeStamp": "2026-09-30T15:09:41.1459911+00:00", "Log": "F INFO:     100.100.0.26:34856 - \"POST /mcp HTTP/1.1\" 401 Unauthorized"}
+{"TimeStamp": "2026-09-30T15:09:45.7862132+00:00", "Log": "F INFO:     127.0.0.1:51538 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:09:55.7873996+00:00", "Log": "F INFO:     127.0.0.1:37136 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:10:05.7854552+00:00", "Log": "F INFO:     127.0.0.1:49788 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:10:15.7854229+00:00", "Log": "F INFO:     127.0.0.1:48366 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:10:25.7858141+00:00", "Log": "F INFO:     127.0.0.1:55352 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:10:35.7848162+00:00", "Log": "F INFO:     127.0.0.1:54944 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:10:45.7851321+00:00", "Log": "F INFO:     127.0.0.1:59542 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:10:55.7847591+00:00", "Log": "F INFO:     127.0.0.1:43494 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:11:05.7849011+00:00", "Log": "F INFO:     127.0.0.1:40554 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:11:15.785251+00:00", "Log": "F INFO:     127.0.0.1:39116 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:11:25.7875811+00:00", "Log": "F INFO:     127.0.0.1:60066 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:11:35.7846371+00:00", "Log": "F INFO:     127.0.0.1:57736 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:11:45.7858548+00:00", "Log": "F INFO:     127.0.0.1:56066 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:11:55.7857252+00:00", "Log": "F INFO:     127.0.0.1:58514 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:12:05.7817029+00:00", "Log": "F INFO:     127.0.0.1:34504 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:12:15.7822507+00:00", "Log": "F INFO:     127.0.0.1:58402 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:12:25.7828634+00:00", "Log": "F INFO:     127.0.0.1:41238 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:12:35.7840252+00:00", "Log": "F INFO:     127.0.0.1:34266 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:12:45.7824517+00:00", "Log": "F INFO:     127.0.0.1:51098 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:12:55.7894556+00:00", "Log": "F INFO:     127.0.0.1:58654 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:13:05.7851486+00:00", "Log": "F INFO:     127.0.0.1:58242 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:13:15.7852755+00:00", "Log": "F INFO:     127.0.0.1:36024 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:13:25.7862821+00:00", "Log": "F INFO:     127.0.0.1:34634 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:13:35.7867335+00:00", "Log": "F INFO:     127.0.0.1:44362 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:13:45.7858596+00:00", "Log": "F INFO:     127.0.0.1:34332 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:13:55.7854704+00:00", "Log": "F INFO:     127.0.0.1:45348 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:14:05.7852165+00:00", "Log": "F INFO:     127.0.0.1:36768 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:14:15.7858847+00:00", "Log": "F INFO:     127.0.0.1:45112 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:14:25.7886012+00:00", "Log": "F INFO:     127.0.0.1:57434 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:14:35.7857261+00:00", "Log": "F INFO:     127.0.0.1:37478 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:14:45.7830933+00:00", "Log": "F INFO:     127.0.0.1:59050 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:14:55.7864245+00:00", "Log": "F INFO:     127.0.0.1:39474 - \"GET /healthz HTTP/1.1\" 200 OK"}
+{"TimeStamp": "2026-09-30T15:15:01.6647218+00:00", "Log": "F INFO:     Shutting down"}
+{"TimeStamp": "2026-09-30T15:15:01.7651904+00:00", "Log": "F INFO:     Waiting for application shutdown."}
+{"TimeStamp": "2026-09-30T15:15:01.7652772+00:00", "Log": "F INFO:mcp.server.streamable_http_manager:StreamableHTTP session manager shutting down"}
+{"TimeStamp": "2026-09-30T15:15:01.7655627+00:00", "Log": "F INFO:     Application shutdown complete."}
+{"TimeStamp": "2026-09-30T15:15:01.7656764+00:00", "Log": "F INFO:     Finished server process [1]"}

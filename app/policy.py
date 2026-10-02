@@ -17,7 +17,7 @@ from typing import Any, NamedTuple
 import yaml
 from opentelemetry import metrics, trace
 
-from app import entra, nonces
+from app import entra, faults, nonces
 
 POLICY_PATH = Path(__file__).with_name("policy.yaml")
 
@@ -175,17 +175,29 @@ def governed(fn):
         decision, reason, approved_by = decide(
             tool, kwargs, POLICY, os.environ.get("APPROVAL_SECRET", ""), consume=nonces.consume
         )
+        gate_ms = (time.perf_counter() - start) * 1000
+        fault_ms = 0
         try:
             if decision != "allowed":
                 return {"denied": True, "reason": reason}
             try:
+                fault_ms = faults.FAULT_MS.get()
+                if fault_ms:
+                    time.sleep(fault_ms / 1000)  # demo fault; inside the timed region on purpose
                 return fn(**kwargs)
             except Exception as e:  # noqa: BLE001 - surface the cause as data, not a bare "tool error"
                 reason = f"error:{type(e).__name__}"
                 return {"error": str(e).splitlines()[0][:300]}
         finally:
             _record(
-                tool, kwargs, decision, reason, (time.perf_counter() - start) * 1000, approved_by
+                tool,
+                kwargs,
+                decision,
+                reason,
+                (time.perf_counter() - start) * 1000,
+                approved_by,
+                gate_ms,
+                fault_ms,
             )
 
     return wrapper
@@ -211,6 +223,8 @@ def _record(
     reason: str,
     latency_ms: float,
     approved_by: str = "",
+    gate_ms: float = 0.0,
+    fault_ms: int = 0,
 ) -> None:
     event = {
         "tool": tool,
@@ -218,9 +232,14 @@ def _record(
         "decision": decision,
         "reason": reason,
         "latency_ms": round(latency_ms, 2),
+        # Time spent deciding. gate_ms flat while latency_ms climbs means the delay is upstream
+        # of the policy layer.
+        "gate_ms": round(gate_ms, 2),
     }
     if approved_by:
         event["approved_by"] = approved_by
+    if fault_ms:
+        event["fault_ms"] = fault_ms  # an injected delay, never silent (see app/faults.py)
     audit_event(**event)
     _calls.add(1, {"tool": tool, "decision": decision})
     _latency.record(latency_ms, {"tool": tool})

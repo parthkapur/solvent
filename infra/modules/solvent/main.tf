@@ -327,6 +327,15 @@ resource "azurerm_container_app" "main" {
         name  = "ENTRA_AUDIENCE"
         value = var.entra_audience
       }
+      # Emitted only when on, so prod's container spec stays literally unchanged (an empty-valued
+      # env entry risks a perpetual diff in the nightly drift plan).
+      dynamic "env" {
+        for_each = var.fault_injection ? [1] : []
+        content {
+          name  = "FAULT_INJECTION"
+          value = "1"
+        }
+      }
       liveness_probe {
         transport = "HTTP"
         path      = "/healthz"
@@ -436,6 +445,54 @@ resource "azurerm_application_insights_workbook" "controls" {
                       approved_by = tostring(Properties.approved_by),
                       args_hash = tostring(Properties.args_hash)
             | order by TimeGenerated desc
+          KQL
+        }
+      },
+      {
+        type = 3
+        content = {
+          version       = "KqlItem/1.0"
+          size          = 0
+          title         = "Calls per minute by decision (1h)"
+          queryType     = 0
+          visualization = "timechart"
+          query         = <<-KQL
+            AppTraces
+            | where TimeGenerated > ago(1h) and isnotempty(Properties.decision)
+            | summarize calls = count() by bin(TimeGenerated, 1m), decision = tostring(Properties.decision)
+          KQL
+        }
+      },
+      {
+        type = 3
+        content = {
+          version       = "KqlItem/1.0"
+          size          = 0
+          title         = "p95 latency vs the gate, per minute (1h)"
+          queryType     = 0
+          visualization = "timechart"
+          query         = <<-KQL
+            AppTraces
+            | where TimeGenerated > ago(1h) and tostring(Properties.decision) == "allowed"
+            | extend latency_ms = todouble(Properties.latency_ms), gate_ms = todouble(Properties.gate_ms)
+            | summarize p95_latency_ms = percentile(latency_ms, 95), p95_gate_ms = percentile(gate_ms, 95) by bin(TimeGenerated, 1m)
+          KQL
+        }
+      },
+      {
+        type = 3
+        content = {
+          version       = "KqlItem/1.0"
+          size          = 0
+          title         = "Error budget: allowed calls within 2 s against a 99% objective (24h)"
+          queryType     = 0
+          visualization = "table"
+          query         = <<-KQL
+            AppTraces
+            | where TimeGenerated > ago(24h) and tostring(Properties.decision) == "allowed"
+            | summarize good = countif(todouble(Properties.latency_ms) <= 2000), total = count()
+            | extend consumed_pct = round(100.0 * (total - good) / (0.01 * total), 1)
+            | project sli_pct = round(100.0 * good / total, 3), budget_left_pct = max_of(0.0, 100.0 - consumed_pct), good, total
           KQL
         }
       },

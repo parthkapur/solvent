@@ -67,3 +67,9 @@ variable "container_app_environment_id" {
   default     = ""
   description = "Existing Container App Environment to run in. Empty creates one, which is what prod does."
 }
+
+variable "fault_injection" {
+  type        = bool
+  default     = false
+  description = "Let authenticated callers add latency with the X-Solvent-Fault header. Dev only; the demo harness uses it."
+}
